@@ -1,0 +1,109 @@
+services:
+  control-api:
+    build: ./control-api
+    ports:
+      - "8000:8000"
+    volumes:
+      - control-api-data:/data
+    environment:
+      CONTROL_API_DB_PATH: /data/control-api.db
+      DEMO_SESSION_ID: demo-session-1
+      SEED_DEMO_DATA: "true"
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 2s
+      timeout: 2s
+
+  control-api-mitm-bridge:
+    image: alpine/socat
+    command: "TCP-LISTEN:8000,fork,reuseaddr TCP:control-api:8000"
+    networks:
+      - default
+      - kind
+    depends_on:
+      control-api:
+        condition: service_healthy
+
+  proxy:
+    build: ./proxy
+    ports:
+      - "8100:8080"
+    environment:
+      CONTROL_API_URL: http://control-api:8000
+      SESSION_ID: demo-session-1
+      MITM_MODE: regular
+      MITM_LISTEN_PORT: "8080"
+    volumes:
+      - mitm-dev-ca:/tmp/mitm-confdir
+    depends_on:
+      control-api:
+        condition: service_healthy
+
+  web:
+    build:
+      context: ./web
+      args:
+        VITE_CONTROL_API_URL: http://localhost:8000
+        VITE_LAUNCHER_URL: http://localhost:8400
+        VITE_INTERACTOR_URL: http://localhost:8500
+        VITE_GENERATOR_URL: http://localhost:8300
+    ports:
+      - "4173:4173"
+    depends_on:
+      - control-api
+
+  generator:
+    build: ./generator
+    ports:
+      - "8300:8000"
+    environment:
+      CONTROL_API_URL: http://control-api:8000
+      INTERACTOR_URL: http://interactor:8000
+    depends_on:
+      control-api:
+        condition: service_healthy
+
+  launcher:
+    build: ./launcher
+    ports:
+      - "8400:8000"
+    environment:
+      CONTROL_API_URL: http://control-api:8000
+      MITM_CONTROL_API_URL: http://control-api-mitm-bridge:8000
+      KUBECONFIG: /kubeconfig/config
+      AGENT_IMAGE_REGISTRY: kind-registry:5000
+      PROXY_IMAGE: kind-registry:5000/agent-scanner-proxy:latest
+    volumes:
+      - ./.kube-kind-config.yaml:/kubeconfig/config:ro
+    networks:
+      - default
+      - kind
+    depends_on:
+      control-api:
+        condition: service_healthy
+
+  interactor:
+    build: ./interactor
+    ports:
+      - "8500:8000"
+    environment:
+      CONTROL_API_URL: http://control-api:8000
+      KUBECONFIG: /kubeconfig/config
+    volumes:
+      - ./.kube-kind-config.yaml:/kubeconfig/config:ro
+    networks:
+      - default
+      - kind
+    depends_on:
+      control-api:
+        condition: service_healthy
+
+networks:
+  default: {}
+  kind:
+    external: true
+    name: kind
+
+volumes:
+  control-api-data:
+  mitm-dev-ca:

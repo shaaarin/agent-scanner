@@ -1,0 +1,90 @@
+/* Design tokens modeled directly on cabinet.miem.hse.ru's real CSS custom
+   properties (font Onest, brand-pumpkin orange accent, black-opacity text
+   scale, 1.2-2rem border-radius scale, soft shadows). Values pulled from
+   the site's own stylesheet, renamed for this project. */
+
+:root {
+  /* rem base: 1rem = 10px, matching the source site's `font-size: 62.5%` */
+  font-size: 62.5%;
+
+  --brand: #ff6d00;
+  --brand-hover: #e56200;
+  --brand-active: #cc5700;
+  --brand-150: rgba(255, 109, 0, 0.15);
+  --brand-250: rgba(255, 109, 0, 0.25);
+  --brand-contrast: #fff;
+
+  --text-1000: #000;
+  --text-900: rgba(0, 0, 0, 0.9);
+  --text-800: rgba(0, 0, 0, 0.8);
+  --text-700: rgba(0, 0, 0, 0.7);
+  --text-600: rgba(0, 0, 0, 0.6);
+  --text-500: rgba(0, 0, 0, 0.5);
+  --text-400: rgba(0, 0, 0, 0.4);
+  --text-300: rgba(0, 0, 0, 0.3);
+
+  --background-base: #fff;
+  --background-warm: #fff9f5;
+  --background-generic: rgba(0, 0, 0, 0.06);
+  --background-gray: rgba(0, 0, 0, 0.03);
+
+  --separator-default: #e6e6e6;
+  --separator-list: #f0f0f0;
+
+  --shadow-1: rgba(26, 26, 26, 0.08);
+  --shadow-1-blur: 1.6rem;
+  --shadow-2: rgba(0, 0, 0, 0.16);
+  --shadow-2-blur: 1.6rem;
+
+  --status-positive-bg: #e6f5f0;
+  --status-positive: #009b64;
+  --status-negative-bg: #fae6ec;
+  --status-negative: #cc003a;
+  --status-warning-bg: #fff5d1;
+  --status-warning: #e5b500;
+
+  --tag-1: #dbdff3;
+  --tag-2: #fef1cc;
+  --tag-3: #ccebe0;
+  --tag-4: #f2d0da;
+  --tag-5: #d3cceb;
+
+  --radius-s: 1.2rem;
+  --radius-m: 1.4rem;
+  --radius-l: 1.6rem;
+  --radius-xl: 2rem;
+
+  --header-height: 6.8rem;
+  --sidebar-width: 6.4rem;
+
+  --font-sans: Onest, "Onest Fallback", -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+
+  --font-header-l-size: 4.8rem;
+  --font-header-l-line: 5.2rem;
+  --font-header-m-size: 3.2rem;
+  --font-header-m-line: 4rem;
+  --font-header-s-size: 2rem;
+  --font-header-s-line: 2.8rem;
+  --font-body-size: 1.6rem;
+  --font-body-line: 2.4rem;
+  --font-caption-m-size: 1.4rem;
+  --font-caption-m-line: 2rem;
+  --font-caption-s-size: 1.2rem;
+  --font-caption-s-line: 1.6rem;
+
+  /* Compatibility aliases for pages written against the earlier
+     placeholder token names, now pointed at the real MIEM values above. */
+  --color-nav-bg: var(--background-base);
+  --color-nav-text: var(--text-1000);
+  --color-nav-text-muted: var(--text-500);
+  --color-accent: var(--brand);
+  --color-danger: var(--status-negative);
+  --color-text-muted: var(--text-600);
+  --radius-sm: var(--radius-s);
+  --shadow-card: 0 0 var(--shadow-1-blur) 0 var(--shadow-1);
+  --shadow-card-hover: 0 0.4rem 1.2rem 0 var(--shadow-2);
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+}

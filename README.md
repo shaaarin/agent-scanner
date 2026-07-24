@@ -1,92 +1,65 @@
 # agent-scanner
 
+A testing platform for web applications that integrate LLMs with Tool Calling,
+focused on prompt-injection attacks against tool-calling logic (unauthorized
+tool invocation, parameter tampering, sandbox escape) and on using tool
+calling as a trigger/proxy for classic web vulnerabilities (XSS, SSRF, RCE,
+IDOR, SQLi) reachable through tool arguments or tool results.
 
+Injection happens directly in LLM traffic — user messages, tool results, and
+assistant responses — at an **LLM Proxy** layer, not by tampering with
+infrastructure below the LLM conversation.
 
-## Getting started
+See [`docs/architecture.md`](docs/architecture.md) for the full design and
+phased roadmap. Implemented so far: the LLM proxy/injection core, an LLM-based
+attack generator, classic-web-vuln signature detection, the web UI, and a
+Kubernetes-based agent launcher + interactor (agents are built from a git
+repo in-cluster and run as Pods; only Anthropic-format support and Skills
+support remain).
 
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
+## How an agent attaches
 
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
+**Zero changes.** A tested agent's own real LLM config — `OPENAI_API_KEY`,
+`OPENAI_BASE_URL`, whatever it already has — is left completely untouched.
+The platform intercepts its outbound HTTPS traffic transparently at the
+network level: each agent Pod gets a CA trust-store overwrite plus an
+iptables redirect into an `mitm-proxy` sidecar that terminates and re-signs
+the connection on the fly (see `docs/architecture.md`'s "MITM pivot"
+section for the full mechanism). The agent never needs to know the platform
+exists.
 
-## Add your files
+## Quickstart
 
-- [ ] [Create](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#create-a-file) or [upload](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#upload-a-file) files
-- [ ] [Add files using the command line](https://docs.gitlab.com/ee/gitlab-basics/add-file.html#add-a-file-using-the-command-line) or push an existing Git repository with the following command:
+Every LLM call in this platform — the tested agent's own traffic, the
+attack generator, the interactor, and any local example agent — goes
+through a real OpenAI-compatible provider. There are no mock LLM stand-ins.
+Copy `.env.example` to `.env` and fill in `LLM_PROVIDER_BASE_URL` /
+`LLM_PROVIDER_API_KEY` / `LLM_PROVIDER_MODEL` (any OpenAI-compatible
+endpoint works: OpenAI itself, OpenRouter, a self-hosted vLLM/Ollama server,
+etc. — pick something cheap).
 
 ```
-cd existing_repo
-git remote add origin https://git.miem.hse.ru/2303/agent-scanner.git
-git branch -M master
-git push -uf origin master
+cp .env.example .env   # then edit it
+docker compose up --build
 ```
 
-## Integrate with your tools
+This brings up the full platform: `control-api` (campaign/template/LLM-model
+store), `proxy` (the MITM interception point, with classic-web-vuln
+signature detection on tool arguments), `web` (the dashboard UI, at
+`http://localhost:4173`), `generator` (the LLM-based attack generator), and
+two real example agents (`stub-agent`, a minimal tool-calling script;
+`customer-support-agent`, a real LangGraph-framework agent — see below) that
+exercise the whole platform against your configured provider.
 
-- [ ] [Set up project integrations](https://git.miem.hse.ru/2303/agent-scanner/-/settings/integrations)
-
-## Collaborate with your team
-
-- [ ] [Invite team members and collaborators](https://docs.gitlab.com/ee/user/project/members/)
-- [ ] [Create a new merge request](https://docs.gitlab.com/ee/user/project/merge_requests/creating_merge_requests.html)
-- [ ] [Automatically close issues from merge requests](https://docs.gitlab.com/ee/user/project/issues/managing_issues.html#closing-issues-automatically)
-- [ ] [Enable merge request approvals](https://docs.gitlab.com/ee/user/project/merge_requests/approvals/)
-- [ ] [Automatically merge when pipeline succeeds](https://docs.gitlab.com/ee/user/project/merge_requests/merge_when_pipeline_succeeds.html)
-
-## Test and Deploy
-
-Use the built-in continuous integration in GitLab.
-
-- [ ] [Get started with GitLab CI/CD](https://docs.gitlab.com/ee/ci/quick_start/index.html)
-- [ ] [Analyze your code for known vulnerabilities with Static Application Security Testing(SAST)](https://docs.gitlab.com/ee/user/application_security/sast/)
-- [ ] [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/ee/topics/autodevops/requirements.html)
-- [ ] [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/ee/user/clusters/agent/)
-- [ ] [Set up protected environments](https://docs.gitlab.com/ee/ci/environments/protected_environments.html)
-
-***
-
-# Editing this README
-
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thank you to [makeareadme.com](https://www.makeareadme.com/) for this template.
-
-## Suggestions for a good README
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
-
-## Name
-Choose a self-explaining name for your project.
-
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
-
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
-
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
-
-## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
-
-## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
-
-## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
-
-## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
-
-## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
-
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
-
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
-
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
-
-## License
-For open source projects, say how it is licensed.
-
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
+`launcher` and `interactor` additionally need a **Kubernetes cluster**
+reachable via a kubeconfig — tested agents are built from a git repo
+in-cluster (git-clone + Kaniko) and launched as Pods, not plain Docker
+containers, so the MITM interception above has a real Pod network namespace
+to work in. See [`docs/running-locally.md`](docs/running-locally.md) for the
+one-time local `kind`-cluster setup this requires, and full walkthroughs of
+every piece — including a complete real-world case study: a real LangGraph
+customer-support agent (`examples/langgraph-customer-support`) with tools
+that move real (simulated) money, launched in-cluster, driven by the
+`interactor` LLM as an ordinary customer, and hijacked via an injected
+prompt into issuing an unauthorized refund — all through the transparent
+MITM path, with the agent never told the platform exists.
