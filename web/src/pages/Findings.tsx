@@ -22,15 +22,15 @@ export function Findings() {
     <div>
       <PageHeader
         title="Уязвимости"
-        description="Обмены, в которых детектор зафиксировал успешную инъекцию, сгруппированные по сессии."
+        description="Обмены с зафиксированной успешной инъекцией, сгруппированные по сессии."
       />
       {sessionCount === 0 && (
-        <div className="card" style={{ color: "var(--color-text-muted)" }}>
+        <div className="card" style={{ color: "var(--text-600)" }}>
           Уязвимостей не обнаружено.
         </div>
       )}
       {Object.entries(bySession).map(([sessionId, sessionEvents]) => (
-        <div key={sessionId} style={{ marginBottom: "var(--space-5)" }}>
+        <div key={sessionId} style={{ marginBottom: "2.4rem" }}>
           <h2>
             {sessionId}{" "}
             <span className="badge badge-danger">

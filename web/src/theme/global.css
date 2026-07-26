@@ -119,10 +119,7 @@ textarea {
   cursor: not-allowed;
 }
 
-input[type="text"],
-input[type="number"],
-input[type="password"],
-input[type="url"],
+input:not([type="checkbox"]):not([type="radio"]),
 select,
 textarea {
   width: 100%;
@@ -131,13 +128,97 @@ textarea {
   border-radius: var(--radius-s);
   background: var(--background-base);
   color: var(--text-1000);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
 }
 
-input:focus,
+input:not([type="checkbox"]):not([type="radio"])::placeholder,
+textarea::placeholder {
+  color: var(--text-400);
+}
+
+input:not([type="checkbox"]):not([type="radio"]):hover:not(:disabled):not(:focus),
+select:hover:not(:disabled):not(:focus),
+textarea:hover:not(:disabled):not(:focus) {
+  border-color: var(--text-300);
+}
+
+input:not([type="checkbox"]):not([type="radio"]):focus,
 select:focus,
 textarea:focus {
-  outline: 0.2rem solid var(--brand-150);
+  outline: none;
   border-color: var(--brand);
+  box-shadow: 0 0 0 0.3rem var(--brand-150);
+}
+
+input:disabled,
+select:disabled,
+textarea:disabled {
+  background: var(--background-gray);
+  color: var(--text-400);
+  cursor: not-allowed;
+}
+
+textarea {
+  resize: vertical;
+  line-height: var(--font-body-line);
+}
+
+select {
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: 3.6rem;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='rgba(0,0,0,0.45)' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 1.2rem center;
+  background-size: 1.4rem;
+  cursor: pointer;
+}
+
+select:disabled {
+  cursor: not-allowed;
+}
+
+input[type="checkbox"] {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 1.8rem;
+  height: 1.8rem;
+  flex-shrink: 0;
+  border: 0.15rem solid var(--separator-default);
+  border-radius: 0.5rem;
+  background: var(--background-base);
+  cursor: pointer;
+  display: inline-grid;
+  place-content: center;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+input[type="checkbox"]:hover:not(:disabled) {
+  border-color: var(--brand);
+}
+
+input[type="checkbox"]:checked {
+  background: var(--brand);
+  border-color: var(--brand);
+}
+
+input[type="checkbox"]:checked::after {
+  content: "";
+  width: 0.5rem;
+  height: 0.9rem;
+  border: solid var(--brand-contrast);
+  border-width: 0 0.2rem 0.2rem 0;
+  transform: rotate(45deg) translate(-0.05rem, -0.1rem);
+}
+
+input[type="checkbox"]:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 0.3rem var(--brand-150);
+}
+
+input[type="checkbox"]:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 label {
@@ -251,7 +332,7 @@ pre code {
   transition: box-shadow 0.18s ease, transform 0.18s ease !important;
 }
 .dashboard-tile:hover {
-  box-shadow: var(--shadow-card-hover) !important;
+  box-shadow: 0 0.4rem 1.2rem 0 var(--shadow-2) !important;
   transform: translateY(-0.2rem);
 }
 

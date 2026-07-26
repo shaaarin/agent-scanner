@@ -8,14 +8,13 @@ from app.models import TrafficEvent
 
 router = APIRouter(prefix="/events", tags=["events"])
 
-MAX_RAW_EXCERPT_BYTES = 4096
-
 
 @router.post("", response_model=TrafficEvent)
 def create_event(payload: TrafficEvent, session: Session = Depends(get_session)):
+    # raw_excerpt is stored in full, untruncated -- the fuzz/tree engines
+    # replay the exact captured messages array to the tested LLM directly,
+    # so a truncated body would corrupt every downstream fuzzing attempt.
     event = TrafficEvent(**payload.model_dump(exclude={"id"}))
-    if len(event.raw_excerpt) > MAX_RAW_EXCERPT_BYTES:
-        event.raw_excerpt = event.raw_excerpt[:MAX_RAW_EXCERPT_BYTES]
     session.add(event)
     session.commit()
     session.refresh(event)

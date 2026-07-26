@@ -22,10 +22,19 @@ const statusBadgeClass: Record<string, string> = {
 
 const stoppedReasonLabel: Record<string, string> = {
   success: "успех",
-  natural_end: "естественное завершение",
-  budget: "исчерпан бюджет ходов",
-  stopped: "остановлено вручную",
+  no_success: "успеха нет",
 };
+
+function responseText(response: Record<string, unknown>): string {
+  const choices = response.choices as { message?: { content?: string } }[] | undefined;
+  return choices?.[0]?.message?.content ?? "";
+}
+
+function responseToolCalls(response: Record<string, unknown>): string[] {
+  const choices = response.choices as { message?: { tool_calls?: { function?: { name?: string } }[] } }[] | undefined;
+  const toolCalls = choices?.[0]?.message?.tool_calls ?? [];
+  return toolCalls.map((tc) => tc.function?.name ?? "").filter(Boolean);
+}
 
 export function TreeRunDetail() {
   const { id } = useParams();
@@ -102,7 +111,7 @@ export function TreeRunDetail() {
   }
 
   if (!treeRun) {
-    return <div style={{ padding: "var(--space-5)", color: "var(--text-500)" }}>Загрузка…</div>;
+    return <div style={{ padding: "2.4rem", color: "var(--text-500)" }}>Загрузка…</div>;
   }
 
   return (
@@ -110,21 +119,23 @@ export function TreeRunDetail() {
       <PageHeader
         title={treeRun.name}
         description={campaign ? `сканирование: ${campaign.name} (${campaign.session_id})` : undefined}
-        actions={<Link to="/tree-runs" className="btn btn-secondary">← К списку</Link>}
+        actions={
+          <Link to={`/campaigns/${treeRun.base_campaign_id}`} className="btn btn-secondary">← К сканированию</Link>
+        }
       />
 
       {error && (
-        <div className="card" style={{ borderColor: "var(--color-danger)", marginBottom: "var(--space-4)" }}>
+        <div className="card" style={{ borderColor: "var(--status-negative)", marginBottom: "1.6rem" }}>
           {error}
         </div>
       )}
 
-      <div className="card" style={{ marginBottom: "var(--space-5)" }}>
+      <div className="card" style={{ marginBottom: "2.4rem" }}>
         <p style={{ fontSize: 13 }}>
           статус: <span className={`badge ${statusBadgeClass[treeRun.status] ?? "badge-neutral"}`}>
             {statusLabel[treeRun.status] ?? treeRun.status}
           </span>
-          {" · "}ходов backbone: {nodes.length}/{treeRun.max_backbone_turns}
+          {" · "}базовый диалог: {nodes.length ? "выполнен" : "не выполнен"}
           {" · "}чекпоинтов найдено: {checkpoints.length}
           {" · "}попыток всего: {probes.length}
         </p>
@@ -138,9 +149,9 @@ export function TreeRunDetail() {
         </div>
       </div>
 
-      <h2>Backbone-диалог (чистый обход)</h2>
-      <div className="card" style={{ marginBottom: "var(--space-5)" }}>
-        {nodes.length === 0 && <p style={{ color: "var(--color-text-muted)" }}>Ходов пока нет.</p>}
+      <h2>Базовый диалог (без инъекций)</h2>
+      <div className="card" style={{ marginBottom: "2.4rem" }}>
+        {nodes.length === 0 && <p style={{ color: "var(--text-600)" }}>Ходов пока нет.</p>}
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {nodes.map((n) => (
             <div key={n.id} style={{ display: "flex", flexDirection: "column", gap: 8 }}>
@@ -154,8 +165,8 @@ export function TreeRunDetail() {
                   fontSize: 13,
                 }}
               >
-                <div style={{ fontSize: 11, color: "var(--color-text-muted)", marginBottom: 2 }}>
-                  ход {n.turn_index} · interactor
+                <div style={{ fontSize: 11, color: "var(--text-600)", marginBottom: 2 }}>
+                  ход {n.turn_index} · пользователь
                 </div>
                 {n.message_sent}
               </div>
@@ -169,7 +180,7 @@ export function TreeRunDetail() {
                   fontSize: 13,
                 }}
               >
-                <div style={{ fontSize: 11, color: "var(--color-text-muted)", marginBottom: 2 }}>agent</div>
+                <div style={{ fontSize: 11, color: "var(--text-600)", marginBottom: 2 }}>агент</div>
                 {n.agent_reply}
               </div>
             </div>
@@ -179,9 +190,9 @@ export function TreeRunDetail() {
 
       <h2>Чекпоинты</h2>
       {checkpoints.length === 0 && (
-        <div className="card"><p style={{ color: "var(--color-text-muted)" }}>Чекпоинтов пока не найдено.</p></div>
+        <div className="card"><p style={{ color: "var(--text-600)" }}>Чекпоинтов пока не найдено.</p></div>
       )}
-      <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-4)" }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: "1.6rem" }}>
         {checkpoints.map(({ occurrence, attempts }) => (
           <div key={occurrence} className="card">
             <h3 style={{ marginTop: 0 }}>
@@ -203,23 +214,31 @@ export function TreeRunDetail() {
                     <span className={`badge ${a.success ? "badge-danger" : "badge-neutral"}`}>
                       {a.success ? "успех" : "не удалось"}
                     </span>
-                    {a.diverged_from_backbone && <span className="badge badge-warning">отличается от backbone</span>}
-                    <span style={{ color: "var(--color-text-muted)" }}>judge: {a.judge_score.toFixed(2)}</span>
+                    {a.diverged_from_backbone && <span className="badge badge-warning">отличается от базового диалога</span>}
+                    <span style={{ color: "var(--text-600)" }}>судья: {a.judge_score.toFixed(2)}</span>
                   </div>
                   {a.divergence_detail && (
-                    <p style={{ fontSize: 12, color: "var(--color-text-muted)", margin: "0.4rem 0 0" }}>
+                    <p style={{ fontSize: 12, color: "var(--text-600)", margin: "0.4rem 0 0" }}>
                       {a.divergence_detail}
                     </p>
                   )}
                   <details style={{ marginTop: "0.6rem" }}>
                     <summary style={{ cursor: "pointer", fontSize: 12 }}>
-                      Ход диалога попытки ({a.trajectory.length})
+                      Прямой вызов LLM с изменённым результатом инструмента
                     </summary>
-                    <div style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 8 }}>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 8 }}>
                       {a.trajectory.map((turn, i) => (
                         <div key={i} style={{ fontSize: 12 }}>
-                          <div><strong>ход {turn.turn_index} →</strong> {turn.message_sent}</div>
-                          <div style={{ color: "var(--color-text-muted)" }}>← {turn.reply}</div>
+                          <div><strong>ответ модели:</strong> {responseText(turn.response) || "(пусто)"}</div>
+                          {responseToolCalls(turn.response).length > 0 && (
+                            <div style={{ color: "var(--text-600)" }}>
+                              вызовы инструментов: {responseToolCalls(turn.response).join(", ")}
+                            </div>
+                          )}
+                          <details style={{ marginTop: 4 }}>
+                            <summary style={{ cursor: "pointer" }}>сырые данные запроса/ответа</summary>
+                            <pre style={{ fontSize: 11, overflow: "auto", maxHeight: 240 }}>{JSON.stringify(turn, null, 2)}</pre>
+                          </details>
                         </div>
                       ))}
                     </div>

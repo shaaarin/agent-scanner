@@ -4,11 +4,9 @@ import { Icon, type IconName } from "./Icon";
 const items: { to: string; label: string; icon: IconName; end?: boolean }[] = [
   { to: "/", label: "Главная", icon: "home", end: true },
   { to: "/campaigns", label: "Сканирования", icon: "scans" },
-  { to: "/templates", label: "Шаблоны", icon: "templates" },
+  { to: "/attack-prompts", label: "Атаки", icon: "attacks" },
   { to: "/llm-models", label: "LLM-модели", icon: "llm" },
   { to: "/agent-configs", label: "Конфигурации", icon: "agent" },
-  { to: "/fuzz-runs", label: "One-shot фаззинг", icon: "fuzz" },
-  { to: "/tree-runs", label: "Дерево инъекций", icon: "tree" },
   { to: "/events", label: "События", icon: "events" },
   { to: "/findings", label: "Уязвимости", icon: "findings" },
 ];
@@ -30,7 +28,6 @@ export function Sidebar() {
         zIndex: 10,
       }}
     >
-      {/* Logo */}
       <NavLink
         to="/"
         title="Agent Scanner"
@@ -50,21 +47,22 @@ export function Sidebar() {
             width: "3.6rem",
             height: "3.6rem",
             borderRadius: "var(--radius-m)",
-            background: "var(--brand)",
+            background: "#fff",
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
-            fontWeight: 700,
-            color: "var(--brand-contrast)",
-            fontSize: "1.3rem",
-            letterSpacing: "-0.03em",
+            overflow: "hidden",
+            padding: "0.4rem",
           }}
         >
-          AS
+          <img
+            src="https://cabinet.miem.hse.ru/miem-logo-square.svg"
+            alt="MIEM"
+            style={{ width: "100%", height: "100%", objectFit: "contain" }}
+          />
         </span>
       </NavLink>
 
-      {/* Nav items */}
       <nav
         style={{
           display: "flex",

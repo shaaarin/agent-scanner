@@ -1,36 +1,50 @@
 """Orchestrates a FuzzRun: a budget-driven search over InjectionTemplate
-variants, delivered through the platform's *existing* production path
-unchanged (proxy's injector/detector, interactor's /run) -- see docs for the
-full per-iteration flow. Runs as a background asyncio task (see main.py's
-POST /fuzz/{id}/start), not inline with the HTTP request, since a fuzz run
-can take many iterations and must be pausable.
+variants against the direct/user_message target. Every attempt is a direct
+chat-completion call against the tested agent's own LLM (see
+generator/app/direct_llm.py) with a mutated copy of the one honest baseline
+exchange's first captured message array (see generator/app/backbone.py) --
+no ephemeral Campaign, no `interactor`, no `proxy` involved per attempt.
+Runs as a background asyncio task (see main.py's POST /fuzz/{id}/start), not
+inline with the HTTP request, since a fuzz run can take many iterations and
+must be pausable.
 """
 
-import asyncio
+import copy
 import json
 import uuid
 
-from app import bandit, control_client, interactor_client, judge, llm_client, mutators, seed_corpus
+from app import (
+    attack_prompt_seeds,
+    backbone,
+    bandit,
+    control_client,
+    direct_llm,
+    injection_apply,
+    judge,
+    llm_client,
+    mutators,
+    response_helpers,
+    seed_corpus,
+    success_detector,
+)
 from app.prompts import ADAPT_PROMPT, MUTATION_PROMPT
 
 RUNNING_STATUSES = {"running"}
 
-# proxy/app/control_client.py caches GET /campaigns/active for
-# ACTIVE_CAMPAIGN_CACHE_TTL seconds (default 2) per session_id. Each iteration
-# here activates a fresh ephemeral Campaign -- if two iterations complete
-# faster than that TTL (e.g. against a very fast LLM), the next iteration's
-# first exchange can race a stale read of the *previous* iteration's
-# campaign, misattributing the resulting TrafficEvent's campaign_id (and
-# this iteration would then see zero events for its own new_campaign["id"]).
-# Settling briefly after activation, longer than the default TTL, avoids
-# this -- discovered during verification of the injection-tree feature,
-# which hits the same race harder (see tree_engine.py).
-CAMPAIGN_ACTIVATION_SETTLE_SECONDS = 2.5
 
-
-async def _bootstrap_seeds(fuzz_run: dict) -> list[int]:
-    if fuzz_run["seed_template_ids"]:
-        return fuzz_run["seed_template_ids"]
+async def _bootstrap_seeds(fuzz_run: dict, generator_llm_model: dict) -> list[int]:
+    """Priority: explicit seed_template_ids + freshly LLM-generated seeds from
+    the attack_prompt_ids checklist (both, if given) -- falls back to the
+    built-in seed_corpus only if neither is set, preserving the zero-config
+    default.
+    """
+    seed_ids = list(fuzz_run["seed_template_ids"])
+    if fuzz_run["attack_prompt_ids"]:
+        seed_ids += await attack_prompt_seeds.generate_seeds_from_attack_prompts(
+            fuzz_run["attack_prompt_ids"], generator_llm_model, f"fuzz_run:{fuzz_run['id']}", fuzz_run["injection_target"]
+        )
+    if seed_ids:
+        return seed_ids
     return await seed_corpus.ensure_seed_pool(fuzz_run["injection_target"])
 
 
@@ -72,17 +86,21 @@ async def run_fuzz_iterations(fuzz_run_id: int) -> None:
 
     generator_llm_model_id = base_campaign.get("generator_llm_model_id")
     judge_llm_model_id = fuzz_run.get("judge_llm_model_id") or generator_llm_model_id
-    if not generator_llm_model_id or not judge_llm_model_id:
+    if not generator_llm_model_id or not judge_llm_model_id or not base_campaign.get("agent_config_id"):
         await control_client.update_fuzz_run(fuzz_run_id, {"status": "stopped"})
         return
-    generator_llm_model = await control_client.get_llm_model(generator_llm_model_id)
-    judge_llm_model = await control_client.get_llm_model(judge_llm_model_id)
-
-    seed_ids = await _bootstrap_seeds(fuzz_run)
-    local_attempts = await control_client.list_attempts(fuzz_run_id)
-    iteration = len(local_attempts)
-
     try:
+        generator_llm_model = await control_client.get_llm_model(generator_llm_model_id)
+        judge_llm_model = await control_client.get_llm_model(judge_llm_model_id)
+
+        backbone_requests = await backbone.ensure_backbone(base_campaign)
+        direct_checkpoint_body = json.loads(backbone_requests[0]["raw_excerpt"])
+        credential = direct_llm.resolve_target_credential(backbone_requests[0])
+
+        seed_ids = await _bootstrap_seeds(fuzz_run, generator_llm_model)
+        local_attempts = await control_client.list_attempts(fuzz_run_id)
+        iteration = len(local_attempts)
+
         while iteration < fuzz_run["max_iterations"]:
             fuzz_run = await control_client.get_fuzz_run(fuzz_run_id)
             if fuzz_run["status"] not in RUNNING_STATUSES:
@@ -94,28 +112,14 @@ async def run_fuzz_iterations(fuzz_run_id: int) -> None:
             mutated, strategy = await _mutate(fuzz_run, seed_template, generator_llm_model, local_attempts, iteration)
             new_template = await control_client.create_template(mutated)
 
-            new_campaign = await control_client.create_campaign(
-                {
-                    "name": f"{base_campaign['name']}-fuzz-{fuzz_run_id}-{iteration}",
-                    "session_id": base_campaign["session_id"],
-                    "template_id": new_template["id"],
-                    "status": "active",
-                    "injection_rate": 1.0,
-                    "agent_config_id": base_campaign.get("agent_config_id"),
-                    "interactor_llm_model_id": base_campaign.get("interactor_llm_model_id"),
-                    "generator_llm_model_id": base_campaign.get("generator_llm_model_id"),
-                    "interactor_persona": base_campaign.get("interactor_persona"),
-                    "user_instruction": base_campaign.get("user_instruction"),
-                }
+            mutated_body = copy.deepcopy(direct_checkpoint_body)
+            injection_apply.apply_injection(mutated_body, new_template["target"], new_template["mode"], new_template["payload"])
+            response_body = await direct_llm.call_raw_completion(credential, mutated_body)
+
+            detector_success, _detail = success_detector.evaluate(
+                mutated_body, response_body, new_template["success_indicator"], new_template["success_indicator_field"]
             )
-            await asyncio.sleep(CAMPAIGN_ACTIVATION_SETTLE_SECONDS)
-
-            result = await interactor_client.run_one_shot(new_campaign["id"])
-            transcript = result.get("transcript", [])
-            agent_reply = next((t["text"] for t in reversed(transcript) if t["speaker"] == "agent"), "")
-
-            events = await control_client.list_campaign_events(new_campaign["id"])
-            detector_success = any(e["success_detected"] for e in events)
+            agent_reply = response_helpers.get_response_text(response_body)
 
             attack_goal = new_template.get("description") or new_template["payload"]
             judge_result = await judge.judge_compliance(judge_llm_model, agent_reply, attack_goal)
@@ -129,7 +133,6 @@ async def run_fuzz_iterations(fuzz_run_id: int) -> None:
                     "iteration": iteration,
                     "seed_template_id": seed_id,
                     "template_id": new_template["id"],
-                    "campaign_id": new_campaign["id"],
                     "mutation_strategy": strategy,
                     "detector_success": detector_success,
                     "judge_score": judge_result["score"],

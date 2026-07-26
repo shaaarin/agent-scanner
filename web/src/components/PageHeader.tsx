@@ -10,13 +10,13 @@ export function PageHeader({
   actions?: ReactNode;
 }) {
   return (
-    <div style={{ marginBottom: "var(--space-6)" }}>
+    <div style={{ marginBottom: "3.2rem" }}>
       <div
         style={{
           display: "flex",
           justifyContent: "space-between",
           alignItems: "flex-start",
-          gap: "var(--space-4)",
+          gap: "1.6rem",
           marginBottom: description ? "0.6rem" : 0,
         }}
       >

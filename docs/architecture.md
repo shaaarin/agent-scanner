@@ -1,68 +1,91 @@
 # Architecture
 
-## Phase 1 — LLM Proxy MVP [transport revised — see "MITM pivot" below]
+## Phase 1 — LLM Proxy MVP [transport revised — see "MITM pivot" below; capture-only revised — see "Direct-to-LLM fuzzing delivery" below]
 
 Two services:
 
 - **`proxy`** (mitmproxy addon, see "MITM pivot" below for how traffic
-  actually reaches it): the interception point. On each intercepted
-  `.../chat/completions` flow:
+  actually reaches it): **capture-only** — it never injects or detects
+  anything itself. On each intercepted `.../chat/completions` flow:
   1. Reads `SESSION_ID` from its own environment (one sidecar per Pod, set
      by `launcher`).
   2. Polls `control-api` (`GET /campaigns/active?session_id=...`, 2s TTL
-     in-memory cache) for the active injection campaign bound to that
-     session.
-  3. If the campaign's template targets `user_message`, `tool_result`, or
-     `system_prompt`, mutates the matching message in the request body
-     (append/prepend/replace) before forwarding upstream.
-  4. Forwards the (possibly mutated) request to whatever real upstream the
-     tested agent's own connection was headed to — mitmproxy discovers this
+     in-memory cache) purely to resolve which `campaign_id` this session's
+     traffic should be attributed to for logging — the response carries no
+     template/injection fields at all (`{campaign_id, session_id, status}`).
+  3. Forwards the request unmodified to whatever real upstream the tested
+     agent's own connection was headed to — mitmproxy discovers this
      per-connection, `proxy` never needs to resolve it itself.
-  5. For non-streamed responses: if the template targets
-     `assistant_response`, mutates the response (either text content, or — if
-     the payload parses as `{"name": ..., "arguments": ...}` — splices in a
-     fabricated tool call). Runs the detector against the (possibly mutated)
-     response and logs a `TrafficEvent`.
-  6. For streamed responses (`"stream": true`): passes SSE chunks through to
-     the client **unmodified** (via mitmproxy's native `flow.response.stream`
-     callback) while reassembling them in memory to run the same detector.
-     **Response injection is not supported for streaming requests in this
-     MVP** — logging/detection only.
-  7. Every request and response is logged to `control-api` via
+  4. For streamed responses (`"stream": true`): passes SSE chunks through to
+     the client unmodified while reassembling them in memory so the complete
+     body still gets logged.
+  5. Every request and response is logged to `control-api` via
      `POST /events`, fire-and-forget — a `control-api` outage never breaks
      the proxied call.
 
 - **`control-api`** (FastAPI + SQLModel/SQLite): the control plane and single
   source of truth for `InjectionTemplate`, `Campaign`, and `TrafficEvent`.
-  Also the backend for the future web UI and attack generator.
+  Also the backend for the web UI and attack generator.
 
-The body-transformation/detection modules (`openai_provider.py`,
-`injector.py`, `detector.py`, `vuln_signatures.py`) are transport-agnostic —
-they only ever touch plain `dict` request/response bodies, never an HTTP
-request/response object directly. This is what made the MITM pivot (below)
-a transport-layer rewrite rather than a logic rewrite.
+**Why capture-only**: injection and detection used to happen live, in
+`proxy`, against the tested agent's real intercepted traffic (this section
+described that design until the "Direct-to-LLM fuzzing delivery" pivot
+below). That mechanism required creating a fresh ephemeral `Campaign` row
+per fuzzing attempt so `proxy` would inject/detect exactly once per attempt
+— which the current design replaced entirely: `proxy`'s only remaining job
+is capturing the *one* honest baseline exchange per `Campaign` (so the fuzz
+engines know what the agent's LLM actually sees), and every fuzzing attempt
+after that is a direct chat-completion call `generator` makes itself,
+outside `proxy` and outside the live agent. See that section for the full
+mechanism and the reasoning behind it.
+
+The former body-transformation/detection modules (`openai_provider.py`'s
+injection helpers, `injector.py`, `detector.py`, `vuln_signatures.py`) were
+transport-agnostic — pure functions over plain `dict` bodies, never touching
+an HTTP request/response object directly. That's what made them portable:
+they were **moved from `proxy/app/` into `generator/app/`**
+(`injection_apply.py`, `success_detector.py`, `vuln_signatures.py`,
+`response_helpers.py`) rather than rewritten, since fuzzing attempts now
+construct/mutate a body and call an LLM directly instead of a live
+`HTTPFlow` being intercepted. `proxy/app/openai_provider.py` kept only its
+streaming-reconstruction helpers (`StreamAccumulator`, `parse_sse_lines`,
+`is_streaming_request`), still needed for capture.
 
 ### Data model
 
 - **`InjectionTemplate`**: `target` (`user_message` | `tool_result` |
   `assistant_response` | `system_prompt`), `mode` (`append` | `prepend` |
   `replace`), `payload`, `success_indicator` (regex), `success_indicator_field`
-  (`tool_name` | `tool_arguments` | `response_text`), `tags`.
-- **`Campaign`**: binds a template to a `session_id`, `status`
-  (`active`/`paused`/`stopped`), `injection_rate` (0.0–1.0 probability per
-  eligible exchange). Only one campaign may be `active` per `session_id`.
-- **`TrafficEvent`**: one row per intercepted request/response, tagging
-  `injected`, `injection_target`, `success_detected`, and a truncated
-  `raw_excerpt` for audit.
+  (`tool_name` | `tool_arguments` | `response_text`), `tags`. Still exists
+  exactly as before as an internal artifact — every generated fuzzing
+  attempt creates one to record what was tried — it's just never "activated"
+  via a live `Campaign`/`proxy` anymore; see "Direct-to-LLM fuzzing
+  delivery" below. Never user-facing (no `Templates` CRUD page).
+- **`Campaign`**: the single scan-configuration point — `session_id`,
+  `agent_config_id`, the platform's own `interactor_llm_model_id`/
+  `generator_llm_model_id`, `interactor_persona`/`user_instruction`. Carries
+  no template/injection fields at all (removed: `template_id`,
+  `injection_rate`, `inject_at_occurrence` — dead once nothing ever
+  "activates" a template on a live campaign). `status` is a small lifecycle:
+  `new` (just created) → `active` (launched; `proxy` attributes captured
+  traffic to it, and the one honest baseline exchange for its `FuzzRun`/
+  `TreeRun` gets driven for real) → `paused` (halted, resumable back to
+  `active`) or `cancelled` (halted, terminal).
+- **`TrafficEvent`**: one row per intercepted request/response. `injected`/
+  `injection_target`/`success_detected` are always `false`/`null` now (dead
+  fields kept for schema continuity, since `proxy` never injects or detects
+  — see above). `raw_excerpt` is stored **in full, untruncated** (previously
+  capped at 4096 bytes) — it's load-bearing now: the fuzz/tree engines
+  replay the exact captured `messages` array to the tested LLM directly, so
+  a truncated body would corrupt every downstream fuzzing attempt.
 
 ### Provider support
 
-Only OpenAI's `/v1/chat/completions` format is implemented
-(`proxy/app/openai_provider.py`). The injection/detection logic
-(`injector.py`, `detector.py`) is written against a small functional
-interface (`inject_request`, `inject_response`, `iter_tool_calls`,
-`get_response_text`) so an Anthropic `/v1/messages` provider module can be
-added later (Phase 5) without touching the routing logic in `main.py`.
+Only OpenAI's `/v1/chat/completions` format is implemented. The former
+injection/detection functional interface (`inject_request`/`inject_response`/
+`iter_tool_calls`/`get_response_text`) now lives in `generator/app/`
+(see above) rather than `proxy/app/`; an Anthropic `/v1/messages` provider
+module would extend that interface there instead.
 
 ## MITM pivot — how traffic actually reaches `proxy`
 
@@ -167,57 +190,101 @@ on `launcher`, resolved via the same `host_alias.py` helper) instead of at
 
 ## Phase 2 — Attack generator (LLM-based)
 
-A new `generator` service (FastAPI + httpx). It never touches `proxy`'s runtime path — it only creates `InjectionTemplate` rows via `control-api`, which `proxy` already knows how to consume.
+A `generator` service (FastAPI + httpx). It never touches `proxy`'s runtime path — it only
+creates `InjectionTemplate` rows via `control-api`, and (for fuzzing) calls the tested LLM
+directly itself — see "Direct-to-LLM fuzzing delivery" below.
 
-- **`generator/app/prompts.py`**: one system prompt per attack class (`tool_call_hijack`, `sandbox_escape`, `xss_via_tool_arg`, `ssrf_via_tool_arg`, `rce_via_tool_arg`, `idor_via_tool_arg`, `sqli_via_tool_arg`), each ending in a shared strict-JSON response-shape instruction matching `InjectionTemplate`'s fields. `MUTATION_PROMPT`/`ADAPT_PROMPT` use `__MARKER__`-style `str.replace()` substitution rather than `str.format()`, since the embedded JSON example in the shared response-shape text contains literal braces that broke `.format()` (hit and fixed during verification).
-- **`generator/app/llm_client.py`**: calls the configured LLM via **LiteLLM**'s unified `acompletion()` interface (not a hand-rolled OpenAI-format httpx call) — works against any provider LiteLLM supports, picked via the `LLMModel`'s `provider_type`/`model`, with `base_url` passed through as a custom `api_base`. Never through `proxy`, since the generator's own LLM calls are not the system under test. Parses/validates the assistant's JSON response.
+- **`control-api`'s `AttackPrompt`** (`control-api/app/models.py`, `/attack-prompts` CRUD router): instructions for the generator LLM on how to construct one class of attack (a jailbreak/injection technique) — `name`, `description`, `system_prompt`, `tags`. Deliberately carries **no delivery target**: an attack's semantics (what it's trying to get the agent to do) are independent of *where* it's delivered, so the same checklist entry seeds both a `FuzzRun` (direct/`user_message`) and a `TreeRun` (indirect/`tool_result`) — whichever engine consumes it enforces its own target (`fuzz_engine.py` forces `user_message`, `tree_engine.py` forces `tool_result`), same as each already does for its own mutation loop. This **replaced** an earlier hardcoded `generator/app/prompts.py:ATTACK_CLASS_PROMPTS` dict (7 built-in classes: `tool_call_hijack`, `sandbox_escape`, `xss_via_tool_arg`, `ssrf_via_tool_arg`, `rce_via_tool_arg`, `idor_via_tool_arg`, `sqli_via_tool_arg`) once it became clear users need to author/edit their own, not just the built-in ones. `control-api/app/seed.py` seeds those same 7 as `AttackPrompt` rows on startup, so nothing built-in was lost.
+- **`generator/app/prompts.py`** now holds only the shared, non-attack-specific scaffolding: `RESPONSE_SHAPE` (the strict-JSON response-shape instruction matching `InjectionTemplate`'s fields, appended to whichever `AttackPrompt.system_prompt` is in play) and `MUTATION_PROMPT`/`ADAPT_PROMPT` (`__MARKER__`-style `str.replace()` substitution rather than `str.format()`, since the embedded JSON example in `RESPONSE_SHAPE` contains literal braces that broke `.format()` — hit and fixed during verification).
+- **`generator/app/llm_client.py`**: calls the configured LLM via **LiteLLM**'s unified `acompletion()` interface (not a hand-rolled OpenAI-format httpx call) — works against any provider LiteLLM supports, picked via the `LLMModel`'s `provider_type`/`model`, with `base_url` passed through as a custom `api_base`. Never through `proxy`, since the generator's own LLM calls are not the system under test. Parses/validates the assistant's JSON response. `generator/app/direct_llm.py` is the sibling used for fuzzing attempts specifically — see below.
 - **`generator/app/main.py`** routes:
-  - `POST /generate {attack_class, llm_model_id, target_context}` → calls the LLM with the attack-class prompt, creates the resulting `InjectionTemplate` (tagged `attack_class:<x>`, `generator:llm`).
+  - `POST /generate {attack_prompt_id, llm_model_id, target_context}` → fetches the `AttackPrompt` from `control-api`, calls the LLM with its `system_prompt` + `RESPONSE_SHAPE`, creates the resulting `InjectionTemplate` (tagged `attack_prompt:<id>`, `generator:llm`).
   - `POST /mutate {template_id, llm_model_id, strategy_hint, count}` → fetches the existing template, asks the LLM for `count` variants, creates each (tagged `mutated_from:<id>`).
-  - `POST /adapt {campaign_id, llm_model_id?}` → fetches the campaign's current template plus its recent unsuccessful `TrafficEvent`s (`GET /events?campaign_id=...&success_detected=false`); `llm_model_id` defaults to the campaign's `generator_llm_model_id` if not given explicitly; asks the LLM to reason about likely failure and propose a different variant, creates it (tagged `adapted_from:<id>`, `campaign:<id>`).
-- Verified against a real provider (see `docs/running-locally.md` — register an `LLMModel` from `.env`'s `LLM_PROVIDER_*` creds) for all three endpoints; there is no mock LLM stand-in for this service.
+  - `POST /adapt` was **removed**: it used to fetch "the campaign's current template" and its recent unsuccessful `TrafficEvent`s, but a `Campaign` never carries a "current template" anymore (see "Direct-to-LLM fuzzing delivery" below) — its reasoning (adapt from recent failures) is now fully absorbed into `fuzz_engine.py`/`tree_engine.py`'s own `mode=adaptive` (they already draw on this run's own `FuzzAttempt`/`InjectionProbe` history, a strictly better feedback loop than one standalone campaign-triggered call).
+- Verified against a real provider (see `docs/running-locally.md` — register an `LLMModel` from `.env`'s `LLM_PROVIDER_*` creds); there is no mock LLM stand-in for this service.
+
+### Direct-to-LLM fuzzing delivery (shared by both engines below)
+
+Both the fuzz engine (direct) and the injection tree (indirect) used to deliver every single
+fuzzing attempt by creating a **fresh ephemeral `Campaign` row**, activating it, and driving the
+**real tested agent** through `interactor`, relying on `proxy`'s transparent MITM interception to
+apply the injection and detect success on the agent's own live traffic. This was rejected as
+unnecessary churn — a 20-iteration `FuzzRun` meant 20 throwaway `Campaign` rows — and replaced
+with a fundamentally simpler mechanism:
+
+1. **One honest baseline exchange per `Campaign`, shared by both engines.**
+   `generator/app/backbone.py::ensure_backbone(base_campaign)` checks whether `base_campaign_id`
+   already has captured request-direction `TrafficEvent`s; if not, it drives exactly one exchange
+   for real via `interactor_client.session_turn(base_campaign_id, message=None)` (persona-authored
+   message) — the *only* point where the live agent, `interactor`, and `proxy`'s MITM interception
+   are involved at all. Whichever of `run_fuzz_iterations`/`run_tree` starts first does this; the
+   other reuses the same captured events (an in-process `asyncio.Lock` keyed by `base_campaign_id`
+   serializes the race — a known single-generator-process MVP limitation, not distributed-safe).
+2. **Every fuzzing attempt is a direct chat-completion call, not an agent call.** Each captured
+   request event's `raw_excerpt` is the *exact* `messages` array (+ `tools`/`model`/etc.) the real
+   agent's LLM client sent at that point. An attempt takes a `copy.deepcopy` of the relevant
+   captured body, mutates one message in place
+   (`generator/app/injection_apply.py::apply_injection` — ported from the old `proxy/app/
+  openai_provider.py`/`injector.py`, same `append`/`prepend`/`replace` semantics, just operating on
+   a locally-held dict instead of a live `HTTPFlow` body), and sends the mutated body directly to
+   the tested agent's own LLM (`generator/app/direct_llm.py::call_raw_completion` — via LiteLLM,
+   forcing `stream=False`, using the *captured* `model` field rather than a second configured
+   value). The raw completion is scored with `success_detector.evaluate` (ported from
+   `proxy/app/detector.py`, byte-for-byte identical logic) and `judge.judge_compliance` as before.
+   No `Campaign` row, no `interactor` call, no `proxy` involvement for any of this — the whole
+   thing after step 1 is `generator` talking directly to an LLM endpoint.
+3. **Credentials come from what `proxy` actually observed, not from any configured value.**
+   During the one honest baseline exchange, `proxy/addon.py` captures the real upstream connection
+   target and the real `Authorization` header the agent's own LLM client sent
+   (`TrafficEvent.upstream_base_url`/`request_authorization`) — not just the request/response
+   *body*, as it did before. `direct_llm.resolve_target_credential` reads these straight off the
+   captured backbone request, so there is nothing to configure at all: the platform never needs to
+   know or guess the agent's own env var naming for its LLM client, the same "zero changes to the
+   tested agent, transparent interception" principle as the MITM pivot below, just applied to
+   credential discovery too instead of only to traffic interception. (An earlier version of this
+   design asked the user to configure `AgentConfig.target_llm_base_url_env`/`target_llm_api_key_env`
+   — env var *names* to look up in `AgentConfig.env_vars` — removed once it became clear `proxy`
+   already has the real values directly and doesn't need to ask.)
+
+Consequences: `proxy` shrank to pure capture (see Phase 1 above) — nothing left ever sets
+`Campaign.template_id`/`injection_rate`/`inject_at_occurrence`, so those fields were removed
+entirely rather than left nullable-and-unused. `InjectionTemplate` is unaffected — every attempt
+still creates one to record what was tried, just never "activated" via a live campaign.
 
 ### Fuzz engine (one-shot jailbreak/injection fuzzing, direct only)
 
-Extends the same `generator` service with an autonomous, budget-driven search loop over
-`InjectionTemplate` variants — a `FuzzRun` (`control-api/app/models.py`) — instead of manually
-triggering `/generate`/`/mutate`/`/adapt` one at a time. Built after a literature review of
-GPTFuzzer, PAIR/TAP, AgentVigil, and InjecAgent/AgentDojo, which converge on: a persisted log
-of attempts, a seed pool + mutation operators, a bandit-style seed-selection strategy, and a
-judge/oracle scoring each attempt.
+An autonomous, budget-driven search loop over `InjectionTemplate` variants — a `FuzzRun`
+(`control-api/app/models.py`) — instead of manually triggering `/generate`/`/mutate` one at a
+time. Built after a literature review of GPTFuzzer, PAIR/TAP, AgentVigil, and InjecAgent/AgentDojo,
+which converge on: a persisted log of attempts, a seed pool + mutation operators, a bandit-style
+seed-selection strategy, and a judge/oracle scoring each attempt.
 
 **Direct only** (`injection_target=user_message`) — `control-api/app/api/fuzz_runs.py:
-create_fuzz_run` rejects any other target with 400. Indirect (`tool_result`) fuzzing moved
-entirely to the "Injection tree" mechanism below once it became clear real tool-calling agents
-need the whole subsequent run judged, not one exchange, to tell whether an injection worked —
-see that section for why.
+create_fuzz_run` rejects any other target with 400. Indirect (`tool_result`) fuzzing is the
+"Injection tree" mechanism below, sharing the same delivery primitive (previous section) but with
+per-checkpoint discovery instead of a single implicit checkpoint.
 
-- **`control-api`**: two new tables, `FuzzRun` (binds to a `base_campaign_id` for
-  session/agent/LLM config, `mode` is `adaptive`/`non_adaptive`, `seed_template_ids`/
-  `max_iterations`/`stop_on_success`/`status`) and `FuzzAttempt` (one row per iteration: seed
-  template "arm", the mutated template actually tried, the ephemeral delivery `Campaign`,
-  detector + judge verdicts, combined `reward`). New `/fuzz-runs` router, same
-  CRUD/list-with-filters shape as the existing routers.
+- **`control-api`**: `FuzzRun` (binds to a `base_campaign_id` for session/agent/LLM config, `mode`
+  is `adaptive`/`non_adaptive`, `seed_template_ids`/`attack_prompt_ids`/`max_iterations`/
+  `stop_on_success`/`status`) and `FuzzAttempt` (one row per iteration: seed template "arm", the
+  mutated template actually tried, detector + judge verdicts, combined `reward` — no `campaign_id`
+  column anymore, nothing to point at). New `/fuzz-runs` router. `attack_prompt_ids` is the
+  checklist: a scan can pick specific `AttackPrompt`s to seed the search from, generated via one
+  `POST /generate`-equivalent LLM call each at bootstrap (`generator/app/attack_prompt_seeds.py`,
+  which enforces `target="user_message"` on the caller's behalf) — unioned with any explicit
+  `seed_template_ids`; if both are empty, falls back to the built-in `seed_corpus.py` corpus.
 - **`generator`**: `bandit.py` (pure UCB1 `select_seed`, same exploration/exploitation strategy
   GPTFuzzer/AgentVigil use), `seed_corpus.py` (a small hand-authored jailbreak seed library,
-  bootstrapped into `control-api` on first use per `injection_target` — hand-written rather
-  than LLM-generated, since GPTFuzzer found diverse human seeds outperform LLM-authored ones
-  as a starting pool), `judge.py` (LLM-as-judge oracle: classifies whether the agent's reply
-  actually complied with the injected goal — needed because the existing regex/signature
-  `detector` only recognizes tool-call/pattern-shaped success, not a plain jailbreak that
-  produced disallowed prose with no tool call), `mutators.py` (named non-adaptive operators —
-  rephrase/expand/shorten/encode_obfuscate/persona_shift — reusing `prompts.py`'s existing
-  `MUTATION_PROMPT` substitution convention rather than new templates), and `fuzz_engine.py`
-  (the orchestration loop, run as a background `asyncio` task via `POST /fuzz/{id}/start`,
-  cooperatively stoppable via `POST /fuzz/{id}/stop`).
-- **Delivery mechanism, deliberately unchanged**: each iteration creates a new
-  `InjectionTemplate` + a fresh ephemeral `Campaign` (same session/agent/LLM config as the
-  `base_campaign`, reusing `campaigns.py`'s existing "activating a campaign auto-pauses
-  siblings for that `session_id`" behavior so `Campaign.template_id`'s immutable-after-creation
-  convention never needs to be touched) and calls `interactor`'s existing `/run
-  {max_turns: 1}` — `proxy`'s `injector`/`detector` need zero changes, since a `FuzzRun` is
-  just a fast-moving source of ordinary templates/campaigns feeding the same Phase 1-3
-  interception path.
+  bootstrapped into `control-api` on first use per `injection_target`), `judge.py` (LLM-as-judge
+  oracle: classifies whether the agent's reply actually complied with the injected goal — needed
+  because `success_detector` only recognizes tool-call/pattern-shaped success, not a plain
+  jailbreak that produced disallowed prose with no tool call), `mutators.py` (named non-adaptive
+  operators — rephrase/expand/shorten/encode_obfuscate/persona_shift), and `fuzz_engine.py` (the
+  orchestration loop — see "Direct-to-LLM fuzzing delivery" above for what each iteration actually
+  does — run as a background `asyncio` task via `POST /fuzz/{id}/start`, cooperatively stoppable
+  via `POST /fuzz/{id}/stop`; `/fuzz/{id}/start` preflights that `base_campaign` is `status=active`
+  and that its `AgentConfig`'s target LLM credentials actually resolve, failing fast with 400
+  rather than async mid-run).
 - Because every iteration's full state is a durable `FuzzAttempt` row, pausing a run and
   inspecting/resuming it later requires no special snapshot mechanism — it falls out of the
   data model for free. See `docs/running-locally.md`'s "Using the fuzz engine" for the curl
@@ -225,65 +292,51 @@ see that section for why.
 
 ### Injection tree (indirect fuzzing: per-tool-call A/B branching)
 
-Real tool-calling agents often run many internal tool calls — and, for `langgraph`-mode agents
-especially, an ongoing human-in-the-loop dialogue — to complete one task. A single injected
-exchange (what the one-shot engine above does) can't tell you whether a poisoned tool result
-actually changed the agent's behavior; that's only visible from the agent's *entire* subsequent
-run. So indirect (`tool_result`) fuzzing works differently: walk one real, clean conversation
-(the **backbone**) forward. At every point the agent receives a new tool result (a
-**checkpoint**), fuzz it — several mutated payloads, bandit + mutation, reusing the one-shot
-engine's machinery — each run to the agent's own natural completion (or until success is already
-confirmed), then compared against what the backbone itself actually did from that same point.
+Real tool-calling agents often run many internal tool calls to complete one task. A single
+injected exchange in isolation (what the fuzz engine above does) doesn't reveal what an
+already-*established* conversation looks like right before the point being fuzzed — so indirect
+(`tool_result`) fuzzing works differently: the shared honest **backbone** exchange (previous
+section) surfaces a series of points where the agent received a new tool result
+(**checkpoints**). Each checkpoint is fuzzed independently — several mutated payloads, bandit +
+mutation, same delivery primitive as the fuzz engine — each attempt a **single** direct
+chat-completion call against that checkpoint's captured message array with its tool result
+swapped, compared against what the backbone itself actually did right after that same checkpoint.
 
 **The realization that made this tractable**: a single *external* exchange (one `interactor` <->
 agent call) can contain many *internal* tool calls, each a separate request the agent makes to
-its own LLM backend — and `proxy` already intercepts every one of those, regardless of
-`interaction_mode` (`api` or `langgraph`) and regardless of how many external turns it took to
-produce them. So checkpoint discovery doesn't need to happen at the external-turn level at all —
-it's read straight back out of `control-api`'s own `TrafficEvent` log for a campaign. This is
-what makes the feature **mode-agnostic** (works the same for `api` and `langgraph`), and is what
-let a much simpler mechanism replace an earlier design that needed careful per-turn campaign
-swapping and real LangGraph-thread continuity to work at all.
+its own LLM backend — and `proxy` intercepts every one of those during the honest backbone capture,
+regardless of `interaction_mode` (`api` or `langgraph`) and regardless of how many external turns
+it took to produce them. So checkpoint discovery doesn't need to happen at the external-turn level
+at all — it's read straight back out of `control-api`'s own `TrafficEvent` log for a campaign. This
+is what makes the feature **mode-agnostic**.
 
-- **`proxy`** (one small additive change): `Campaign` gained `inject_at_occurrence: Optional[int]`
-  (1-indexed). `proxy/addon.py`'s `InjectionAddon` tracks an in-memory
-  `{(session_id, campaign_id): count}` counter of target-eligible exchanges seen so far
-  (`openai_provider.has_matching_message`/`injector.is_eligible_for_request_injection`, factored
-  out of the existing `inject_request` check) and injects only when the counter equals
-  `inject_at_occurrence`, ignoring `injection_rate` — falls back to the original
-  `random.random() < injection_rate` behavior when unset, so every existing campaign is
-  unaffected. This lets one ephemeral `Campaign` stay active for a probe attempt's **entire**
-  run (however many external turns that takes) with no mid-run PATCHing: `proxy` naturally
-  passes occurrences before and after the targeted one through clean.
-- **`interactor`**: a new resumable single-turn primitive, `POST /session/turn
-  {campaign_id, session_token, message}`, alongside the existing (unchanged) `/run`.
-  `message: null` lets interactor's own persona LLM decide the next line (factored out of
-  `/run`'s loop into `_generate_persona_message`), so it keeps playing a real user turn-by-turn
-  for as long as the caller keeps calling this endpoint — needed because not every tested agent
-  finishes in one exchange. `session_token` is a real LangGraph `thread_id` for `langgraph` mode
-  (`target_client.py:LangGraphSession.start()` now accepts an existing one and skips creating a
-  new thread); for `api` mode it's a no-op (`send_via_api` has no session-continuity primitive
-  today, an existing platform limitation this doesn't attempt to fix).
-- **`control-api`**: `TreeRun` (the search config: `base_campaign_id` — must be `status=active`
-  with `injection_rate=0.0`/`inject_at_occurrence=None` (validated at `/tree/{id}/start`), a
-  genuinely clean backbone that `proxy` is actually considering for this `session_id` —
-  `max_backbone_turns`/`max_probe_turns`/`max_checkpoints`/`attempts_per_checkpoint`/`mode`),
-  `ConversationNode` (one backbone external turn, just enough to replay the same message
-  sequence for a probe), and `InjectionProbe` (one fuzzing attempt at one checkpoint occurrence,
-  holding its full `trajectory`, `stopped_reason`, detector+judge verdict, and a structural
-  `divergence_detail` against the backbone's own real continuation). New `/tree-runs` router.
-- **`generator/app/tree_engine.py`**: reuses `bandit.py`/`mutators.py`/`judge.py`/
-  `seed_corpus.py` unchanged from the one-shot engine (`seed_corpus.ensure_seed_pool` factored
-  out for both to share), plus a new `checkpoints.py` (`checkpoints_from_events`, parses a
-  campaign's `TrafficEvent.raw_excerpt` bodies for newly-appeared `role: tool` messages).
-  Phase A walks the backbone via `/session/turn` until a turn adds no new tool-result events (a
-  documented simplification of "the agent believes it's done") or `max_backbone_turns`. Phase B,
-  per checkpoint: create a fresh ephemeral `Campaign` with `inject_at_occurrence` set to that
-  checkpoint's occurrence number, replay the backbone's own recorded messages turn-by-turn (
-  falling back to persona-driven `message: null` if a poisoned run needs more human-in-the-loop
-  turns than the backbone did), score with the existing detector + judge, and stop early the
-  moment either confirms success. Runs as a background `asyncio` task
-  (`POST /tree/{id}/start`/`POST /tree/{id}/stop`, same pattern as the one-shot engine).
+- **`generator/app/checkpoints.py::checkpoints_from_events`**: reads a campaign's
+  `TrafficEvent`s (full, untruncated `raw_excerpt` — see Phase 1's data-model note) for
+  newly-appeared `role: tool` messages across successive requests. Each checkpoint carries
+  `{occurrence_index, tool_name, tool_result, request_body, flow_id}` — `request_body` is the
+  full captured body as of that tool result first appearing (what gets mutated and replayed
+  directly), `flow_id` links to the paired response `TrafficEvent` holding what the real backbone
+  actually decided to do right after seeing it (used for the divergence comparison below).
+- **`control-api`**: `TreeRun` (the search config: `base_campaign_id`, `max_checkpoints`/
+  `attempts_per_checkpoint`/`mode`/`seed_template_ids`/`attack_prompt_ids`, same checklist
+  mechanism as `FuzzRun`), `ConversationNode` (the backbone's one external exchange), and
+  `InjectionProbe` (one fuzzing attempt at one checkpoint occurrence — `trajectory` now holds
+  exactly one `{request, response}` pair, the direct call's mutated body and raw completion, not a
+  multi-turn transcript — `stopped_reason` (`"success"`/`"no_success"`), detector+judge verdict,
+  and `diverged_from_backbone`/`divergence_detail`). New `/tree-runs` router. No `campaign_id`
+  column on `InjectionProbe` anymore, same reasoning as `FuzzAttempt` above.
+- **`generator/app/tree_engine.py`**: reuses `bandit.py`/`mutators.py`/`judge.py`/`seed_corpus.py`
+  unchanged, plus `checkpoints.py` above. `run_tree` calls the shared `backbone.ensure_backbone`
+  once, then for each checkpoint calls `_probe_checkpoint`: mutate a deep copy of
+  `checkpoint["request_body"]`'s tool-result message
+  (`injection_apply.apply_injection(..., target="tool_result", ...)`), call
+  `direct_llm.call_raw_completion` directly, score with `success_detector.evaluate` + judge
+  fallback. **Divergence** is now a single-step comparison (previously a multi-turn trajectory
+  comparison against a live re-driven agent, which no longer exists): the probe's response's
+  immediate tool-call decision vs. what the backbone's own paired response event (same `flow_id`)
+  shows the real agent actually decided right after that same checkpoint — a strictly more direct
+  measurement of the same thing. Runs as a background `asyncio` task (`POST /tree/{id}/start`/
+  `POST /tree/{id}/stop`, same preflight/pattern as the fuzz engine).
 - See `docs/running-locally.md`'s "Using the injection tree" for the curl walkthrough.
 
 ## Phase 4 — Web UI + scan configuration
@@ -300,15 +353,26 @@ live in `web/src/theme/tokens.css`, named after the source site's own custom
 properties. It talks directly to `control-api` from the browser
 (`VITE_CONTROL_API_URL`, `control-api` has permissive CORS enabled for this).
 
+**Campaigns page** (`web/src/pages/Campaigns.tsx`, route `/campaigns`): the
+single scan-configuration point — creates a `Campaign` (session + agent +
+platform LLM roles) and, via two optional checkbox-gated sections, a linked
+`FuzzRun` (direct) and/or `TreeRun` (indirect) in the same submit
+(`base_campaign_id` set to the campaign just created). No manual
+`InjectionTemplate` picking — templates are internal fuzzing artifacts only
+now (no `Templates` CRUD page).
+
 **Scan progress view** (`web/src/pages/ScanDetail.tsx`, route `/campaigns/:id`):
-a per-scan dashboard — stat cards (exchanges/injected/successes), agent
-launch controls (calls `launcher` directly via `VITE_LAUNCHER_URL`, CORS-enabled
-for this same reason) with live-polled status, a "Run interactor" button
-(calls `interactor` via `VITE_INTERACTOR_URL`) rendering the resulting
-transcript as chat bubbles, and `web/src/components/FlowTimeline.tsx` — groups
-`TrafficEvent`s by `flow_id` into request/response pairs, live-polled every
-3s, with injected/success badges and `detector.evaluate()`'s JSON `detail`
-parsed into chips (indicator match, per-vuln-class signature findings).
+a per-scan dashboard — stat cards (exchanges/successes), agent launch
+controls (calls `launcher` directly via `VITE_LAUNCHER_URL`, CORS-enabled for
+this same reason) with live-polled status, a "Run interactor" button (calls
+`interactor` via `VITE_INTERACTOR_URL`) rendering the resulting transcript as
+chat bubbles, status cards for any linked `FuzzRun`/`TreeRun` (start/stop,
+link to `web/src/pages/FuzzRunDetail.tsx`/`TreeRunDetail.tsx`), and
+`web/src/components/FlowTimeline.tsx` — groups `TrafficEvent`s by `flow_id`
+into request/response pairs, live-polled every 3s. Since `proxy` is
+capture-only now (see Phase 1), every event here is un-injected captured
+traffic; fuzzing results live on the `FuzzRun`/`TreeRun` detail pages
+instead, not this timeline.
 
 Two new `control-api` entities back the scan-configuration screens:
 
@@ -319,20 +383,31 @@ Two new `control-api` entities back the scan-configuration screens:
   The tested agent's own model is *not* an `LLMModel` row at all — see the MITM pivot above: it's just whatever real provider config is in `AgentConfig.env_vars`, intercepted transparently rather than resolved by the platform. (An earlier iteration added `AgentConfig.target_llm_model_id` for this; removed when the MITM pivot made it unnecessary — `proxy` no longer needs to know the target upstream in advance.)
 - **`AgentConfig`**: `git_repo_url`, `git_ref` (default `main`), `git_access_token`
   (optional — a Personal Access Token for private HTTPS repos, embedded
-  into the clone URL as `https://<token>@host/...` by `launcher/app/git_auth.py`,
-  the convention GitHub/GitLab/Bitbucket all accept; no-op for the platform's
-  own `git://` test servers or `ssh://` remotes. Plain text, same accepted
-  MVP tech-debt posture as `LLMModel.api_key` — see the security note in
-  `git_auth.py`'s docstring about clone-failure logs), `dockerfile_path`
-  (default `"Dockerfile"` — path to the Dockerfile itself, relative to the
-  repo root; the build context is always the repo root, matching normal
-  Docker semantics), `env_example_path` (optional — a `.env.example`-style
-  file in the repo that `launcher` reads to auto-fill any `env_vars` keys
-  not already set, see Phase 6), `api_port` (optional — if the agent
-  listens on one, `launcher` auto-exposes it via a `NodePort` Service, see
-  Phase 6), `entrypoint` (optional command override), `env_vars` (JSON dict
-  — this is where the agent's real LLM provider config lives, as plain env
-  vars, exactly like a real deployment), `resources` (optional
+  into the clone URL as `https://oauth2:<token>@host/...` by
+  `launcher/app/git_auth.py` — GitLab's documented PAT-over-HTTPS convention
+  (non-empty placeholder username, token as password); GitHub accepts this
+  shape too since it doesn't validate the username. An earlier version put
+  the token in the username slot with no password
+  (`https://<token>@host/...`), which GitHub tolerated but a real self-hosted
+  GitLab instance rejected as anonymous, falling back to an interactive
+  credential prompt that fails hard in a non-interactive clone. No-op for
+  the platform's own `git://` test servers or `ssh://` remotes. Plain text,
+  same accepted MVP tech-debt posture as `LLMModel.api_key` — see the
+  security note in `git_auth.py`'s docstring about clone-failure logs),
+  `dockerfile_path` (default `"Dockerfile"` — path to the Dockerfile itself,
+  relative to the repo root; the build context is always the repo root,
+  matching normal Docker semantics), `env_example_path` (optional — a
+  `.env.example`-style file in the repo that `launcher` reads to auto-fill
+  any `env_vars` keys not already set, see Phase 6), `api_port` (optional —
+  if the agent listens on one, `launcher` auto-exposes it via a `NodePort`
+  Service, see Phase 6), `entrypoint` (optional command override; not
+  exposed in the web UI's create/edit form — the user's view is that this
+  belongs in the Dockerfile/image, not a platform-level override choice),
+  `env_vars` (JSON dict — this is where the agent's real LLM provider config
+  lives, as plain env vars, exactly like a real deployment; `proxy` captures
+  the real values transparently during the honest baseline exchange rather
+  than needing them configured anywhere else — see "Direct-to-LLM fuzzing
+  delivery" above), `resources` (optional, also not exposed in the web UI —
   `{"cpu": ..., "memory": ...}`), `agent_purpose` (free text describing what
   the agent is for — context for `interactor`'s legit-user persona,
   Phase 7), `interaction_mode` (`none`/`api`/`langgraph`),
@@ -344,8 +419,11 @@ Two new `control-api` entities back the scan-configuration screens:
 - **`Campaign`** gained nullable FKs (`agent_config_id`, `interactor_llm_model_id`,
   `generator_llm_model_id`) and fields (`interactor_persona`,
   `user_instruction` — what the interactor's legit-user persona is
-  allowed/told to do; only `benign_user` is currently honored, see Phase 7)
-  — additive, Phase 1 rows are unaffected.
+  allowed/told to do; only `benign_user` is currently honored, see Phase 7).
+  `status` is a small lifecycle (`new` → `active` → `paused`/`cancelled` —
+  see Phase 1's data-model note) rather than a free-form choice at creation
+  time; the web form always creates `new` and launching/pausing/cancelling
+  are actions on the campaign list afterward.
 
 New routes: `/llm-models` (list responses mask `api_key`; only `GET /llm-models/{id}`
 returns it in full) and `/agent-configs`, both standard CRUD.
@@ -359,12 +437,17 @@ returns it in full) and `/agent-configs`, both standard CRUD.
 
 ## Phase 3 — Detection hardening
 
-Extends `proxy/app/detector.py` beyond the Phase 1 regex-only `success_indicator` check, without any schema change (`TrafficEvent.detail` was always a free-text `str`; it now holds a JSON-encoded string instead of a plain sentence).
+Regex-only `success_indicator` matching, hardened with signature-based classic-web-vuln
+detection, without any schema change (`FuzzAttempt`/`InjectionProbe`'s judge/detector fields were
+always free-form; `detail`-equivalent info holds a JSON-encoded string). Originally lived in
+`proxy/app/detector.py`, applied to live intercepted traffic — **moved to
+`generator/app/success_detector.py`** as part of "Direct-to-LLM fuzzing delivery" (Phase 2 above),
+since `proxy` no longer sees fuzzing attempts at all; logic is otherwise unchanged.
 
-- **`proxy/app/vuln_signatures.py`**: regex signature sets for five vuln classes — `ssrf` (cloud metadata endpoint, localhost/private-IP URLs, `file://`), `sqli` (UNION SELECT, tautology `OR 1=1`, comment/drop-table sequences), `rce` (shell metacharacter chains, `` `cmd` ``/`$(cmd)`), `path_traversal` (`../`, `/etc/passwd`), `xss` (`<script>`, `on*=` handlers, `javascript:`).
-- **`detector.scan_vuln_signatures(request_body, response_body)`**: scans every tool call's `arguments` in the response against all signature sets, and separately checks for **XSS echo-back** — a `role: tool` message earlier in the request's conversation history that looked like XSS reappearing verbatim in the assistant's response text (a proxy for "rendered unescaped downstream").
-- **`detector.evaluate(...)`** combines this with the existing `check_success` (renamed usage, same regex logic): `success_detected` is true if *either* the campaign's own `success_indicator` matches *or* any signature fires. `detail` becomes `{"indicator_match": "...", "vuln_signatures": [{"class": "ssrf", "field": "tool_arguments", "tool": "...", "snippet": "..."}]}`.
-- Wired into both `_proxy_non_streaming` and `_proxy_streaming` in `main.py`, same hook points as Phase 1.
+- **`generator/app/vuln_signatures.py`**: regex signature sets for five vuln classes — `ssrf` (cloud metadata endpoint, localhost/private-IP URLs, `file://`), `sqli` (UNION SELECT, tautology `OR 1=1`, comment/drop-table sequences), `rce` (shell metacharacter chains, `` `cmd` ``/`$(cmd)`), `path_traversal` (`../`, `/etc/passwd`), `xss` (`<script>`, `on*=` handlers, `javascript:`).
+- **`success_detector.scan_vuln_signatures(request_body, response_body)`**: scans every tool call's `arguments` in the response against all signature sets, and separately checks for **XSS echo-back** — a `role: tool` message earlier in the request's conversation history that looked like XSS reappearing verbatim in the assistant's response text (a proxy for "rendered unescaped downstream").
+- **`success_detector.evaluate(...)`** combines this with `check_success` (same regex logic): `success_detected` is true if *either* the template's own `success_indicator` matches *or* any signature fires. The JSON detail becomes `{"indicator_match": "...", "vuln_signatures": [{"class": "ssrf", "field": "tool_arguments", "tool": "...", "snippet": "..."}]}`.
+- Called directly by `fuzz_engine.py`/`tree_engine.py` on each direct chat-completion call's mutated request + raw response — see "Direct-to-LLM fuzzing delivery" above.
 
 ## Phase 6 — Agent launcher (Kubernetes, git-based build)
 
@@ -379,6 +462,9 @@ Tested agents run in Kubernetes, not plain Docker (revised from an initial Docke
    - **Auto-exposure** (`pod_manager.ensure_agent_service`): if `AgentConfig.api_port` is set, `launcher` creates a `NodePort` Service selecting the Pod by those same labels (idempotent — reuses an existing one on relaunch) and reads back the allocated `nodePort`. It then patches the resolved, actually-reachable address (`http://<k8s-node-container-name>:<nodePort>`) into `AgentConfig.api_config.url` or `.langgraph_config.base_url` (host/port replaced, any existing path preserved) via `PUT /agent-configs/{id}` — this is what used to be a manual `kubectl expose` + config-edit step (still documented below as the fallback for agents launched without `api_port` set).
    - **`POST /launch {campaign_id}`** orchestrates all of the above and records `agent_namespace`/`agent_pod_name`/`build_job_name`/`built_image` on the `Campaign`. **`POST /stop/{campaign_id}`** deletes the whole namespace (cascades: Job + Pod + mitm-proxy sidecar + the auto-created Service all gone in one call — a real isolation boundary given the tested agent may end up doing something genuinely hostile) and clears those fields. **`GET /status/{campaign_id}`** reports build/Pod status.
 2. Local MCP servers inside the agent's own Pod are untouched by the platform (same reasoning as before: their tool-call traffic still flows through the same LLM conversation `proxy` already intercepts).
+3. **`launcher/app/repo_inspect.py`** (git introspection only — no k8s/build involved): backs the `AgentConfigs` web UI's creation wizard, called *before* any `AgentConfig` exists yet. `list_branches` (`git ls-remote --heads`, no clone needed) and `inspect_repo` (a shallow clone of one chosen branch, same approach as `env_discovery.py`, walking the tree for `Dockerfile`/`*.Dockerfile` and `.env.example`/`.env.*.example` candidates, parsing every `.env.example` candidate found immediately) back `POST /repo/branches` and `POST /repo/inspect`. Unlike `env_discovery.py` (which silently skips a missing/bad env file since that's a soft convenience during a real launch), both of these **raise** on failure — giving the user clear feedback that a URL/branch/token is wrong is this endpoint's entire purpose. The web wizard: step 1 collects `git_repo_url`/`git_access_token` and loads branches; step 2 (informed by `inspect_repo` for the chosen branch) lets the user *pick* `git_ref`/`dockerfile_path`/`env_example_path` from what's actually in the repo instead of typing them blind, prefilling `env_vars` from the chosen `.env.example`. Editing an existing `AgentConfig` skips the wizard (a flat form, same fields, no re-discovery).
+
+`entrypoint`/`resources` (CPU/memory) are intentionally **not** exposed in the web form at all (create or edit) — the user's view is that these belong in the Dockerfile/image itself, not a platform-level override made through this UI. They remain valid `AgentConfig` fields for API/curl use; editing an existing config that already has them set (e.g. via the API) carries them through unchanged rather than clobbering them, since the UI just never renders inputs for them.
 
 ### Cluster prerequisites (documented, not automated)
 

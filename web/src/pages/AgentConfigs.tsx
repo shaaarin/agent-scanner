@@ -1,18 +1,58 @@
 import { useEffect, useState } from "react";
-import { api } from "../api/client";
+import { api, launcherApi } from "../api/client";
 import type { AgentConfig, InteractionMode } from "../api/types";
 import { PageHeader } from "../components/PageHeader";
 
 type EnvRow = { key: string; value: string };
 
+interface RepoBranchesResponse {
+  branches: string[];
+}
+
+interface RepoInspectResponse {
+  dockerfiles: string[];
+  env_examples: Record<string, Record<string, string>>;
+}
+
 const emptyEnv: EnvRow[] = [{ key: "", value: "" }];
 const DEFAULT_REQUEST_BODY_TEMPLATE = '{\n  "message": "{{message}}"\n}';
+
+const interactionModeLabel: Record<string, string> = {
+  none: "Нет",
+  api: "REST API",
+  langgraph: "LangGraph",
+};
+
+function repoNameFromUrl(url: string): string {
+  const match = url.match(/([^/]+?)(\.git)?\/?$/);
+  return (match?.[1] || "agent").toLowerCase().replace(/[^a-z0-9-]+/g, "-");
+}
 
 export function AgentConfigs() {
   const [configs, setConfigs] = useState<AgentConfig[]>([]);
   const [showForm, setShowForm] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<number | null>(null);
+
+  // Creation wizard: step 1 (load repo) -> step 2 (configure, informed by
+  // what step 1 discovered). Irrelevant when editing (editingId set) --
+  // editing shows a flat form instead, see below.
+  //
+  // draftId: a real AgentConfig row created as soon as step 1 succeeds
+  // (not just held in local component state) -- otherwise closing the tab,
+  // navigating away, or anything interrupting the wizard before the final
+  // "Создать" loses everything the (potentially slow) repo load/inspect
+  // already did. Step 2 just keeps updating this same row via PUT
+  // (exclude_unset semantics server-side, so partial updates are fine)
+  // instead of POSTing a brand new one at the end.
+  const [draftId, setDraftId] = useState<number | null>(null);
+  const [wizardStep, setWizardStep] = useState<"repo" | "configure">("repo");
+  const [loadingRepo, setLoadingRepo] = useState(false);
+  const [inspecting, setInspecting] = useState(false);
+  const [branches, setBranches] = useState<string[]>([]);
+  const [dockerfiles, setDockerfiles] = useState<string[]>([]);
+  const [envExamples, setEnvExamples] = useState<Record<string, Record<string, string>>>({});
+  const [selectedEnvExample, setSelectedEnvExample] = useState("");
 
   const [name, setName] = useState("");
   const [gitRepoUrl, setGitRepoUrl] = useState("");
@@ -21,6 +61,11 @@ export function AgentConfigs() {
   const [dockerfilePath, setDockerfilePath] = useState("Dockerfile");
   const [envExamplePath, setEnvExamplePath] = useState("");
   const [apiPort, setApiPort] = useState("");
+  // entrypoint/cpu/memory: no longer exposed as form fields (the user's
+  // view is that these belong in the Dockerfile/image, not a platform-level
+  // override) -- kept as state only so editing an existing config that
+  // already has them set (e.g. via the API) doesn't silently clobber them
+  // in the PUT payload below.
   const [entrypoint, setEntrypoint] = useState("");
   const [cpu, setCpu] = useState("");
   const [memory, setMemory] = useState("");
@@ -69,6 +114,12 @@ export function AgentConfigs() {
     setLanggraphBaseUrl("");
     setLanggraphAssistantId("agent");
     setLanggraphApiKey("");
+    setWizardStep("repo");
+    setBranches([]);
+    setDockerfiles([]);
+    setEnvExamples({});
+    setSelectedEnvExample("");
+    setDraftId(null);
   }
 
   function handleEdit(c: AgentConfig) {
@@ -99,10 +150,112 @@ export function AgentConfigs() {
     setShowForm(true);
   }
 
-  function handleCancel() {
+  function closeForm() {
     resetForm();
     setEditingId(null);
     setShowForm(false);
+  }
+
+  async function handleCancel() {
+    // An explicit cancel (as opposed to just navigating away, which the
+    // draft is specifically meant to survive) abandons the in-progress
+    // draft for real -- otherwise every cancelled wizard leaves a
+    // half-configured AgentConfig behind forever. Not run on a *successful*
+    // submit (see handleSubmit, which calls closeForm() directly instead) --
+    // by then the draft has just become the real, finished config.
+    if (draftId && !editingId) {
+      await api.delete(`/agent-configs/${draftId}`).catch(() => {});
+      load();
+    }
+    closeForm();
+  }
+
+  function applyEnvExample(path: string, examples: Record<string, Record<string, string>>) {
+    setSelectedEnvExample(path);
+    setEnvExamplePath(path);
+    const parsed = examples[path] ?? {};
+    const rows = Object.entries(parsed).map(([key, value]) => ({ key, value }));
+    setEnvRows(rows.length ? rows : emptyEnv);
+  }
+
+  function handleEnvExampleChange(path: string) {
+    if (!path) {
+      setSelectedEnvExample("");
+      setEnvExamplePath("");
+      setEnvRows(emptyEnv);
+      return;
+    }
+    applyEnvExample(path, envExamples);
+  }
+
+  async function loadInspect(ref: string) {
+    setInspecting(true);
+    setError(null);
+    try {
+      const result = await launcherApi.post<RepoInspectResponse>("/repo/inspect", {
+        git_repo_url: gitRepoUrl,
+        git_ref: ref,
+        git_access_token: gitAccessToken || null,
+      });
+      setDockerfiles(result.dockerfiles);
+      setEnvExamples(result.env_examples);
+      setDockerfilePath(result.dockerfiles[0] ?? "Dockerfile");
+      const envPaths = Object.keys(result.env_examples);
+      if (envPaths.length > 0) {
+        applyEnvExample(envPaths[0], result.env_examples);
+      } else {
+        setSelectedEnvExample("");
+        setEnvExamplePath("");
+      }
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setInspecting(false);
+    }
+  }
+
+  async function handleLoadRepo() {
+    setError(null);
+    setLoadingRepo(true);
+    try {
+      const result = await launcherApi.post<RepoBranchesResponse>("/repo/branches", {
+        git_repo_url: gitRepoUrl,
+        git_access_token: gitAccessToken || null,
+      });
+      setBranches(result.branches);
+      const defaultBranch = result.branches[0];
+      setGitRef(defaultBranch);
+
+      const draftFields = {
+        name: name.trim() || `${repoNameFromUrl(gitRepoUrl)}-${Math.random().toString(36).slice(2, 6)}`,
+        git_repo_url: gitRepoUrl,
+        git_ref: defaultBranch,
+        git_access_token: gitAccessToken || null,
+        agent_purpose: agentPurpose || null,
+      };
+      if (draftId) {
+        await api.put(`/agent-configs/${draftId}`, draftFields);
+      } else {
+        const draft = await api.post<AgentConfig>("/agent-configs", draftFields);
+        setDraftId(draft.id);
+        setName(draft.name);
+      }
+
+      setWizardStep("configure");
+      await loadInspect(defaultBranch);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setLoadingRepo(false);
+    }
+  }
+
+  async function handleBranchChange(ref: string) {
+    setGitRef(ref);
+    if (draftId) {
+      await api.put(`/agent-configs/${draftId}`, { git_ref: ref });
+    }
+    await loadInspect(ref);
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -150,9 +303,12 @@ export function AgentConfigs() {
       if (editingId) {
         await api.put(`/agent-configs/${editingId}`, payload);
       } else {
-        await api.post("/agent-configs", payload);
+        // draftId always exists by the time step 2 can submit -- created
+        // in handleLoadRepo as soon as step 1 succeeds. PUT finishes the
+        // same row rather than POSTing a separate final one.
+        await api.put(`/agent-configs/${draftId}`, payload);
       }
-      handleCancel();
+      closeForm();
       load();
     } catch (e) {
       setError(String(e));
@@ -164,151 +320,74 @@ export function AgentConfigs() {
     load();
   }
 
-  return (
-    <div>
-      <PageHeader
-        title="Конфигурации агентов"
-        description="Исходный код агента (git-репозиторий), его назначение и параметры запуска и взаимодействия. LLM-провайдер агента задаётся переменными окружения — платформа перехватывает трафик прозрачно."
-        actions={
-          <button className="btn" onClick={() => (showForm ? handleCancel() : setShowForm(true))}>
-            {showForm ? "Отмена" : "Новая конфигурация"}
+  // Shared between the wizard's step 2 and the flat edit form.
+  function renderConfigureFields() {
+    return (
+      <>
+        <div className="field">
+          <label>Переменные окружения</label>
+          {envRows.map((row, i) => (
+            <div key={i} style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+              <input placeholder="KEY" value={row.key} onChange={(e) => updateEnvRow(i, "key", e.target.value)} />
+              <input placeholder="значение" value={row.value} onChange={(e) => updateEnvRow(i, "value", e.target.value)} />
+            </div>
+          ))}
+          <button type="button" className="btn btn-secondary" onClick={() => setEnvRows((r) => [...r, { key: "", value: "" }])}>
+            + Добавить переменную
           </button>
-        }
-      />
-
-      {error && (
-        <div className="card" style={{ borderColor: "var(--color-danger)", marginBottom: "var(--space-4)" }}>
-          {error}
         </div>
-      )}
 
-      {showForm && (
-        <form className="card" onSubmit={handleSubmit} style={{ marginBottom: "var(--space-5)" }}>
-          <div className="field">
-            <label>Название</label>
-            <input value={name} onChange={(e) => setName(e.target.value)} required />
-          </div>
+        <div className="field">
+          <label>Порт API (опционально)</label>
+          <input value={apiPort} onChange={(e) => setApiPort(e.target.value)} placeholder="8123" />
+        </div>
 
-          <div className="field">
-            <label>Назначение агента</label>
-            <textarea
-              rows={2}
-              value={agentPurpose}
-              onChange={(e) => setAgentPurpose(e.target.value)}
-              placeholder="Ассистент службы поддержки интернет-магазина книг."
-            />
-          </div>
+        <div className="field">
+          <label>Режим взаимодействия</label>
+          <select value={interactionMode} onChange={(e) => setInteractionMode(e.target.value as InteractionMode)}>
+            <option value="none">Нет (однократный запрос)</option>
+            <option value="api">REST API</option>
+            <option value="langgraph">LangGraph</option>
+          </select>
+        </div>
 
-          <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr", gap: "var(--space-4)" }}>
-            <div className="field">
-              <label>URL репозитория</label>
-              <input
-                value={gitRepoUrl}
-                onChange={(e) => setGitRepoUrl(e.target.value)}
-                placeholder="https://github.com/org/agent-repo.git"
-                required
-              />
-            </div>
-            <div className="field">
-              <label>Ветка / тег</label>
-              <input value={gitRef} onChange={(e) => setGitRef(e.target.value)} placeholder="main" />
-            </div>
-            <div className="field">
-              <label>Путь к Dockerfile</label>
-              <input value={dockerfilePath} onChange={(e) => setDockerfilePath(e.target.value)} placeholder="Dockerfile" />
-            </div>
-          </div>
-
-          <div className="field">
-            <label>Токен доступа (опционально — для приватных репозиториев по HTTPS)</label>
-            <input
-              type="password"
-              value={gitAccessToken}
-              onChange={(e) => setGitAccessToken(e.target.value)}
-              placeholder="ghp_... / glpat-..."
-            />
-          </div>
-
-          <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: "var(--space-4)" }}>
-            <div className="field">
-              <label>Путь к .env.example (опционально)</label>
-              <input value={envExamplePath} onChange={(e) => setEnvExamplePath(e.target.value)} placeholder=".env.example" />
-            </div>
-            <div className="field">
-              <label>Порт API (опционально)</label>
-              <input value={apiPort} onChange={(e) => setApiPort(e.target.value)} placeholder="8123" />
-            </div>
-          </div>
-
-          <div className="field">
-            <label>Команда запуска (опционально, через пробел)</label>
-            <input value={entrypoint} onChange={(e) => setEntrypoint(e.target.value)} placeholder="python agent.py --flag" />
-          </div>
-
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "var(--space-4)" }}>
-            <div className="field">
-              <label>CPU (опционально)</label>
-              <input value={cpu} onChange={(e) => setCpu(e.target.value)} placeholder="500m" />
-            </div>
-            <div className="field">
-              <label>Память (опционально)</label>
-              <input value={memory} onChange={(e) => setMemory(e.target.value)} placeholder="512Mi" />
-            </div>
-          </div>
-
-          <div className="field">
-            <label>Переменные окружения</label>
-            {envRows.map((row, i) => (
-              <div key={i} style={{ display: "flex", gap: 8, marginBottom: 8 }}>
-                <input placeholder="KEY" value={row.key} onChange={(e) => updateEnvRow(i, "key", e.target.value)} />
-                <input placeholder="значение" value={row.value} onChange={(e) => updateEnvRow(i, "value", e.target.value)} />
-              </div>
-            ))}
-            <button type="button" className="btn btn-secondary" onClick={() => setEnvRows((r) => [...r, { key: "", value: "" }])}>
-              + Добавить переменную
-            </button>
-          </div>
-
-          <div className="field">
-            <label>Режим взаимодействия</label>
-            <select value={interactionMode} onChange={(e) => setInteractionMode(e.target.value as InteractionMode)}>
-              <option value="none">Нет (однократный запрос)</option>
-              <option value="api">REST API</option>
-              <option value="langgraph">LangGraph</option>
-            </select>
-          </div>
-
-          {interactionMode === "api" && (
-            <>
-              <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: "var(--space-4)" }}>
-                <div className="field">
-                  <label>URL эндпоинта</label>
-                  <input value={apiUrl} onChange={(e) => setApiUrl(e.target.value)} placeholder="/chat" />
-                </div>
-                <div className="field">
-                  <label>Метод</label>
-                  <select value={apiMethod} onChange={(e) => setApiMethod(e.target.value)}>
-                    <option value="POST">POST</option>
-                    <option value="GET">GET</option>
-                  </select>
-                </div>
+        {interactionMode === "api" && (
+          <>
+            <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: "1.6rem" }}>
+              <div className="field">
+                <label>URL эндпоинта</label>
+                <input value={apiUrl} onChange={(e) => setApiUrl(e.target.value)} placeholder="/chat" />
               </div>
               <div className="field">
-                <label>Шаблон тела запроса (JSON; {"{{message}}"} — место для сообщения)</label>
-                <textarea rows={3} style={{ fontFamily: "monospace" }} value={requestBodyTemplate} onChange={(e) => setRequestBodyTemplate(e.target.value)} />
+                <label>Метод</label>
+                <select value={apiMethod} onChange={(e) => setApiMethod(e.target.value)}>
+                  <option value="POST">POST</option>
+                  <option value="GET">GET</option>
+                </select>
               </div>
-              <div className="field">
-                <label>Поле ответа (dot-path в JSON, например "reply" или "data.0.text")</label>
-                <input value={responseField} onChange={(e) => setResponseField(e.target.value)} placeholder="reply" />
-              </div>
-            </>
-          )}
+            </div>
+            <div className="field">
+              <label>Шаблон тела запроса (JSON; {"{{message}}"} — место для сообщения)</label>
+              <textarea rows={3} style={{ fontFamily: "monospace" }} value={requestBodyTemplate} onChange={(e) => setRequestBodyTemplate(e.target.value)} />
+            </div>
+            <div className="field">
+              <label>Поле ответа (dot-path в JSON, например "reply" или "data.0.text")</label>
+              <input value={responseField} onChange={(e) => setResponseField(e.target.value)} placeholder="reply" />
+            </div>
+          </>
+        )}
 
-          {interactionMode === "langgraph" && (
-            <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr", gap: "var(--space-4)" }}>
+        {interactionMode === "langgraph" && (
+          <>
+            <p style={{ fontSize: 12, color: "var(--text-600)", margin: "0 0 0.6rem" }}>
+              Базовый URL обычно не нужно указывать вручную: если указан «Порт API» выше,
+              платформа определит его сама после запуска агента. Заполняйте поле только если
+              порт API не указан, а адрес выставляется вручную (например, через <code>kubectl expose</code>).
+            </p>
+            <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr", gap: "1.6rem" }}>
               <div className="field">
-                <label>Базовый URL LangGraph</label>
-                <input value={langgraphBaseUrl} onChange={(e) => setLanggraphBaseUrl(e.target.value)} placeholder="http://agent-pod:8123" />
+                <label>Базовый URL LangGraph (опционально — заполняется автоматически)</label>
+                <input value={langgraphBaseUrl} onChange={(e) => setLanggraphBaseUrl(e.target.value)} placeholder="определится автоматически после запуска" />
               </div>
               <div className="field">
                 <label>ID ассистента / графа</label>
@@ -319,9 +398,180 @@ export function AgentConfigs() {
                 <input type="password" value={langgraphApiKey} onChange={(e) => setLanggraphApiKey(e.target.value)} />
               </div>
             </div>
-          )}
+          </>
+        )}
+      </>
+    );
+  }
 
-          <button className="btn" type="submit">{editingId ? "Сохранить" : "Создать"}</button>
+  return (
+    <div>
+      <PageHeader
+        title="Конфигурации агентов"
+        description="Исходный код, назначение и параметры запуска и взаимодействия тестируемого агента. Учётные данные его LLM-провайдера подхватываются из перехваченного трафика и используются при фаззинге."
+        actions={
+          <button className="btn" onClick={() => (showForm ? handleCancel() : setShowForm(true))}>
+            {showForm ? "Отмена" : "Новая конфигурация"}
+          </button>
+        }
+      />
+
+      {error && (
+        <div className="card" style={{ borderColor: "var(--status-negative)", marginBottom: "1.6rem" }}>
+          {error}
+        </div>
+      )}
+
+      {showForm && editingId && (
+        <form className="card" onSubmit={handleSubmit} style={{ marginBottom: "2.4rem" }}>
+          <div className="field">
+            <label>Название</label>
+            <input value={name} onChange={(e) => setName(e.target.value)} required />
+          </div>
+          <div className="field">
+            <label>Назначение агента</label>
+            <textarea
+              rows={2}
+              value={agentPurpose}
+              onChange={(e) => setAgentPurpose(e.target.value)}
+              placeholder="Ассистент службы поддержки интернет-магазина книг."
+            />
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr", gap: "1.6rem" }}>
+            <div className="field">
+              <label>URL репозитория</label>
+              <input value={gitRepoUrl} onChange={(e) => setGitRepoUrl(e.target.value)} required />
+            </div>
+            <div className="field">
+              <label>Ветка / тег</label>
+              <input value={gitRef} onChange={(e) => setGitRef(e.target.value)} placeholder="main" />
+            </div>
+            <div className="field">
+              <label>Путь к Dockerfile</label>
+              <input value={dockerfilePath} onChange={(e) => setDockerfilePath(e.target.value)} placeholder="Dockerfile" />
+            </div>
+          </div>
+          <div className="field">
+            <label>Токен доступа (опционально — для приватных репозиториев по HTTPS)</label>
+            <input
+              type="password"
+              value={gitAccessToken}
+              onChange={(e) => setGitAccessToken(e.target.value)}
+              placeholder="ghp_... / glpat-..."
+            />
+          </div>
+          <div className="field">
+            <label>Путь к .env.example (опционально)</label>
+            <input value={envExamplePath} onChange={(e) => setEnvExamplePath(e.target.value)} placeholder=".env.example" />
+          </div>
+
+          {renderConfigureFields()}
+
+          <button className="btn" type="submit" style={{ marginTop: "1.6rem" }}>Сохранить</button>
+        </form>
+      )}
+
+      {showForm && !editingId && wizardStep === "repo" && (
+        <div className="card" style={{ marginBottom: "2.4rem" }}>
+          <h2 style={{ marginTop: 0 }}>1. Загрузить репозиторий</h2>
+          <div className="field">
+            <label>Название</label>
+            <input value={name} onChange={(e) => setName(e.target.value)} required />
+          </div>
+          <div className="field">
+            <label>Назначение агента</label>
+            <textarea
+              rows={2}
+              value={agentPurpose}
+              onChange={(e) => setAgentPurpose(e.target.value)}
+              placeholder="Ассистент службы поддержки интернет-магазина книг."
+            />
+          </div>
+          <div className="field">
+            <label>URL репозитория</label>
+            <input
+              value={gitRepoUrl}
+              onChange={(e) => setGitRepoUrl(e.target.value)}
+              placeholder="https://gitlab.com/org/agent-repo.git"
+              required
+            />
+          </div>
+          <div className="field">
+            <label>Токен доступа (опционально — для приватных репозиториев по HTTPS)</label>
+            <input
+              type="password"
+              value={gitAccessToken}
+              onChange={(e) => setGitAccessToken(e.target.value)}
+              placeholder="ghp_... / glpat-..."
+            />
+          </div>
+          <button
+            className="btn"
+            type="button"
+            onClick={handleLoadRepo}
+            disabled={loadingRepo || !gitRepoUrl}
+          >
+            {loadingRepo ? "Загрузка…" : "Загрузить репозиторий"}
+          </button>
+          {!name && (
+            <p style={{ fontSize: 12, color: "var(--text-600)", margin: "0.6rem 0 0" }}>
+              Название понадобится перед сохранением на шаге 2 — не обязательно заполнять его сейчас.
+            </p>
+          )}
+        </div>
+      )}
+
+      {showForm && !editingId && wizardStep === "configure" && (
+        <form className="card" onSubmit={handleSubmit} style={{ marginBottom: "2.4rem" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <h2 style={{ marginTop: 0 }}>2. Настроить</h2>
+            <button type="button" className="btn btn-secondary" onClick={() => setWizardStep("repo")}>
+              ← Назад к репозиторию
+            </button>
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1.6rem" }}>
+            <div className="field">
+              <label>Ветка</label>
+              <select value={gitRef} onChange={(e) => handleBranchChange(e.target.value)} disabled={inspecting}>
+                {branches.map((b) => (
+                  <option key={b} value={b}>{b}</option>
+                ))}
+              </select>
+            </div>
+            <div className="field">
+              <label>Dockerfile</label>
+              {dockerfiles.length > 0 ? (
+                <select value={dockerfilePath} onChange={(e) => setDockerfilePath(e.target.value)} disabled={inspecting}>
+                  {dockerfiles.map((d) => (
+                    <option key={d} value={d}>{d}</option>
+                  ))}
+                </select>
+              ) : (
+                <input value={dockerfilePath} onChange={(e) => setDockerfilePath(e.target.value)} placeholder="Dockerfile" />
+              )}
+              {!inspecting && dockerfiles.length === 0 && (
+                <p style={{ fontSize: 12, color: "var(--text-600)", margin: "0.4rem 0 0" }}>
+                  Dockerfile не найден автоматически — укажите путь вручную.
+                </p>
+              )}
+            </div>
+          </div>
+
+          <div className="field">
+            <label>.env.example</label>
+            <select value={selectedEnvExample} onChange={(e) => handleEnvExampleChange(e.target.value)} disabled={inspecting}>
+              <option value="">Нет</option>
+              {Object.keys(envExamples).map((p) => (
+                <option key={p} value={p}>{p}</option>
+              ))}
+            </select>
+            {inspecting && <p style={{ fontSize: 12, color: "var(--text-600)", margin: "0.4rem 0 0" }}>Анализ репозитория…</p>}
+          </div>
+
+          {renderConfigureFields()}
+
+          <button className="btn" type="submit" style={{ marginTop: "1.6rem" }} disabled={inspecting}>Создать</button>
         </form>
       )}
 
@@ -344,15 +594,17 @@ export function AgentConfigs() {
                 <td><code>{c.git_repo_url}</code></td>
                 <td>{c.git_ref}</td>
                 <td>{Object.keys(c.env_vars).length}</td>
-                <td><span className="badge badge-neutral">{c.interaction_mode}</span></td>
-                <td style={{ display: "flex", gap: 8 }}>
-                  <button className="btn btn-secondary" onClick={() => handleEdit(c)}>Изменить</button>
-                  <button className="btn btn-secondary" onClick={() => handleDelete(c.id)}>Удалить</button>
+                <td><span className="badge badge-neutral">{interactionModeLabel[c.interaction_mode] ?? c.interaction_mode}</span></td>
+                <td>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <button className="btn btn-secondary" onClick={() => handleEdit(c)}>Изменить</button>
+                    <button className="btn btn-secondary" onClick={() => handleDelete(c.id)}>Удалить</button>
+                  </div>
                 </td>
               </tr>
             ))}
             {configs.length === 0 && (
-              <tr><td colSpan={6} style={{ color: "var(--color-text-muted)" }}>Нет конфигураций.</td></tr>
+              <tr><td colSpan={6} style={{ color: "var(--text-600)" }}>Нет конфигураций.</td></tr>
             )}
           </tbody>
         </table>

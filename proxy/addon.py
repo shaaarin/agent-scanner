@@ -2,39 +2,63 @@
 `mitm-proxy` sidecar container in a tested agent's Pod (see
 launcher/app/pod_manager.py), started via `mitmdump -s addon.py`.
 
+Capture-only: this addon never injects or detects anything itself anymore.
+It logs every chat/completions request+response as a TrafficEvent so
+`generator`'s fuzz/tree engines can later replay a captured `messages` array
+directly to the tested LLM with one message mutated -- see
+generator/app/backbone.py, injection_apply.py, success_detector.py. Fuzzing
+attempts never touch the tested agent or this proxy at all; only the single
+honest baseline exchange per Campaign does, purely to capture what the real
+agent's LLM client actually sends -- including, on the request side, the
+real upstream base URL and `Authorization` header, so `generator` can later
+call that same real LLM directly using the agent's own real credentials
+without ever needing them configured up front (see
+generator/app/direct_llm.py::resolve_target_credential).
+
 Transparent mode means there's no path prefix to read a session id from
 (unlike the old explicit-`base_url` reverse-proxy design) -- the session id
 is instead the `SESSION_ID` env var launcher injects into this sidecar,
-one per Pod. All the actual body transformation/detection logic
-(openai_provider/injector/detector/vuln_signatures) is untouched from the
-prior reverse-proxy design; only the transport layer changed.
+one per Pod.
 """
 import json
 import os
-import random
 import uuid
 
 from mitmproxy import http
 
-from app import control_client, detector, injector, openai_provider
+from app import control_client, openai_provider
 
 SESSION_ID = os.environ.get("SESSION_ID", "")
 CHAT_COMPLETIONS_SUFFIX = "/chat/completions"
-RAW_EXCERPT_LIMIT = 4096
 
 
-def _truncate(text: str) -> str:
-    return text[:RAW_EXCERPT_LIMIT]
+DEFAULT_PORTS = {"http": 80, "https": 443}
 
 
 def _is_chat_completions(flow: http.HTTPFlow) -> bool:
     return flow.request.path.split("?")[0].endswith(CHAT_COMPLETIONS_SUFFIX)
 
 
+def _upstream_base_url(flow: http.HTTPFlow) -> str:
+    """The real connection target mitmproxy actually intercepted (scheme +
+    host + non-default port) -- not the `Host` header (`pretty_host`, used
+    for the existing display-only `host` field). This is what lets
+    generator's direct_llm.py call the tested agent's own real LLM directly
+    later, using the agent's own real endpoint -- see
+    generator/app/direct_llm.py::resolve_target_credential.
+    """
+    scheme = flow.request.scheme
+    host = flow.request.host
+    port = flow.request.port
+    if port == DEFAULT_PORTS.get(scheme):
+        return f"{scheme}://{host}"
+    return f"{scheme}://{host}:{port}"
+
+
 class _StreamAccumulateCallback:
     """mitmproxy stream callback: passes SSE chunks through unmodified while
-    feeding them into a StreamAccumulator for detection -- streaming
-    responses are observed, never rewritten, same limitation as before.
+    feeding them into a StreamAccumulator so the final assembled body still
+    gets logged -- streaming responses are observed, never rewritten.
     """
 
     def __init__(self) -> None:
@@ -49,25 +73,6 @@ class _StreamAccumulateCallback:
 
 
 class InjectionAddon:
-    def __init__(self) -> None:
-        # (session_id, campaign_id) -> count of target-eligible exchanges seen
-        # so far, for Campaign.inject_at_occurrence. Reset implicitly whenever
-        # a different campaign_id becomes active (a fresh ephemeral campaign
-        # per fuzz attempt always starts this counter at 0).
-        self._occurrence_counters: dict[tuple[str, int], int] = {}
-
-    def _should_inject(self, campaign: dict, template: dict, body: dict) -> bool:
-        target_occurrence = campaign.get("inject_at_occurrence")
-        if target_occurrence is None:
-            return random.random() < campaign["injection_rate"]
-
-        if not injector.is_eligible_for_request_injection(body, template["target"]):
-            return False
-        key = (SESSION_ID, campaign["campaign_id"])
-        occurrence = self._occurrence_counters.get(key, 0) + 1
-        self._occurrence_counters[key] = occurrence
-        return occurrence == target_occurrence
-
     async def request(self, flow: http.HTTPFlow) -> None:
         if not _is_chat_completions(flow):
             return
@@ -78,35 +83,26 @@ class InjectionAddon:
 
         campaign = await control_client.get_active_campaign(SESSION_ID)
         flow.metadata["campaign"] = campaign
-        flow.metadata["request_body"] = body
         flow_id = str(uuid.uuid4())
         flow.metadata["flow_id"] = flow_id
-
-        injected_request = False
-        injection_target = None
-        if campaign is not None and self._should_inject(campaign, campaign["template"], body):
-            template = campaign["template"]
-            if injector.inject_into_request(body, template["target"], template["mode"], template["payload"]):
-                injected_request = True
-                injection_target = template["target"]
-                flow.request.content = json.dumps(body).encode()
 
         await self._log_event(
             campaign=campaign,
             flow_id=flow_id,
             direction="request",
             host=flow.request.pretty_host,
-            injected=injected_request,
-            injection_target=injection_target,
-            success_detected=False,
-            detail="",
             raw_excerpt=json.dumps(body),
+            upstream_base_url=_upstream_base_url(flow),
+            request_authorization=flow.request.headers.get("Authorization", ""),
         )
 
     async def responseheaders(self, flow: http.HTTPFlow) -> None:
         if not _is_chat_completions(flow):
             return
-        request_body = flow.metadata.get("request_body") or {}
+        try:
+            request_body = json.loads(flow.request.content or b"{}")
+        except json.JSONDecodeError:
+            request_body = {}
         if openai_provider.is_streaming_request(request_body):
             flow.response.stream = _StreamAccumulateCallback()
 
@@ -115,12 +111,8 @@ class InjectionAddon:
             return
         campaign = flow.metadata.get("campaign")
         flow_id = flow.metadata.get("flow_id", str(uuid.uuid4()))
-        request_body = flow.metadata.get("request_body") or {}
 
         stream_cb = flow.response.stream
-        injected_response = False
-        injection_target = None
-
         if isinstance(stream_cb, _StreamAccumulateCallback):
             response_body = stream_cb.accumulator.as_response_body()
         else:
@@ -129,37 +121,16 @@ class InjectionAddon:
             except json.JSONDecodeError:
                 return
 
-            if campaign is not None and campaign["template"]["target"] == "assistant_response":
-                template = campaign["template"]
-                if injector.inject_into_response(response_body, template["target"], template["mode"], template["payload"]):
-                    injected_response = True
-                    injection_target = template["target"]
-                    flow.response.content = json.dumps(response_body).encode()
-
-        success_detected = False
-        detail = ""
-        if campaign is not None:
-            success_detected, detail = detector.evaluate(
-                request_body,
-                response_body,
-                campaign["template"]["success_indicator"],
-                campaign["template"]["success_indicator_field"],
-            )
-
         await self._log_event(
             campaign=campaign,
             flow_id=flow_id,
             direction="response",
             host=flow.request.pretty_host,
-            injected=injected_response,
-            injection_target=injection_target,
-            success_detected=success_detected,
-            detail=detail,
             raw_excerpt=json.dumps(response_body),
         )
 
     async def _log_event(
-        self, *, campaign, flow_id, direction, host, injected, injection_target, success_detected, detail, raw_excerpt
+        self, *, campaign, flow_id, direction, host, raw_excerpt, upstream_base_url=None, request_authorization=None
     ) -> None:
         await control_client.post_event(
             {
@@ -170,11 +141,13 @@ class InjectionAddon:
                 "provider": "openai",
                 "host": host,
                 "path": CHAT_COMPLETIONS_SUFFIX,
-                "injected": injected,
-                "injection_target": injection_target,
-                "success_detected": success_detected,
-                "detail": detail,
-                "raw_excerpt": _truncate(raw_excerpt),
+                "injected": False,
+                "injection_target": None,
+                "success_detected": False,
+                "detail": "",
+                "raw_excerpt": raw_excerpt,
+                "upstream_base_url": upstream_base_url,
+                "request_authorization": request_authorization,
             }
         )
 

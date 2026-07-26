@@ -32,6 +32,7 @@ describing "point `OPENAI_BASE_URL` at the proxy," that's stale.
 | `generator` | LLM-authored `InjectionTemplate` generation/mutation/adaptation, via LiteLLM. |
 | `web` | React/Vite dashboard. **UI copy is in Russian** — keep new UI text Russian to match. |
 | `control-api-mitm-bridge` | `alpine/socat` TCP forwarder. Exists solely so `control-api` itself doesn't have to join the `kind` Docker network (see gotcha below). |
+| `launcher-mitm-bridge` / `interactor-mitm-bridge` | `alpine/socat` TCP forwarders that own `launcher`/`interactor`'s host-published port (`8400`/`8500`) instead of those services publishing it themselves (see gotcha below). |
 
 `examples/` holds test/target agents (`stub-agent`, `echo-agent`,
 `langgraph-customer-support`, `git-server`) used to exercise the platform —
@@ -96,13 +97,20 @@ for new changes rather than adding a test framework unprompted.
 ## Environment quirks (WSL2/Docker Desktop, this dev setup specifically)
 
 - A service dual-homed on both the default Compose network and the `kind`
-  network gets a **flaky host-published port** (connection reset from the
-  host, works fine container-to-container). Known for `launcher`/
-  `interactor` (workaround: drive requests via
-  `docker compose exec <service> python3 -c "..."` instead of host curl).
-  This is *why* `control-api-mitm-bridge` exists — `control-api` itself
-  must stay off the `kind` network so its host port (hit constantly by the
-  browser) stays reliable.
+  network gets a **flaky host-published port** (connection reset/
+  `ERR_EMPTY_RESPONSE`, works fine container-to-container). This is *why*
+  `control-api-mitm-bridge` exists — `control-api` itself must stay off the
+  `kind` network so its host port (hit constantly by the browser) stays
+  reliable. `launcher`/`interactor` can't do that (they genuinely need
+  `kind` for k8s API access), so instead each has its own
+  `launcher-mitm-bridge`/`interactor-mitm-bridge` (`alpine/socat`,
+  single-homed) that owns the host-published port (`8400`/`8500`) and
+  forwards to the actual dual-homed service over the `default` network —
+  same fix, aimed at the host side instead of the `kind` side. If a fresh
+  `ERR_EMPTY_RESPONSE`/reset shows up again on one of these ports despite
+  the bridge, fall back to driving requests via
+  `docker compose exec <service> python3 -c "..."` instead of host curl to
+  isolate whether it's this quirk recurring or a real app bug.
 - `examples/git-server`'s attachment to the `kind` Docker network can
   silently drop after sitting idle — `docker compose restart git-server`
   fixes it. Not a code bug.

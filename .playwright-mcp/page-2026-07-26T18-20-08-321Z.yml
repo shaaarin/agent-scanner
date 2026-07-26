@@ -1,0 +1,56 @@
+- generic [ref=f4e3]:
+  - complementary [ref=f4e4]:
+    - link [ref=f4e5] [cursor=pointer]:
+      - /url: /
+      - img "MIEM" [ref=f4e7]
+    - navigation [ref=f4e8]:
+      - generic [ref=f4e9]:
+        - link "Главная" [ref=f4e10] [cursor=pointer]:
+          - /url: /
+        - tooltip "Главная"
+      - generic [ref=f4e14]:
+        - link "Сканирования" [ref=f4e15] [cursor=pointer]:
+          - /url: /campaigns
+        - tooltip "Сканирования"
+      - generic [ref=f4e19]:
+        - link "Атаки" [ref=f4e20] [cursor=pointer]:
+          - /url: /attack-prompts
+        - tooltip "Атаки"
+      - generic [ref=f4e24]:
+        - link "LLM-модели" [ref=f4e25] [cursor=pointer]:
+          - /url: /llm-models
+        - tooltip "LLM-модели"
+      - generic [ref=f4e30]:
+        - link "Конфигурации" [ref=f4e31] [cursor=pointer]:
+          - /url: /agent-configs
+        - tooltip "Конфигурации"
+      - generic [ref=f4e36]:
+        - link "События" [ref=f4e37] [cursor=pointer]:
+          - /url: /events
+        - tooltip "События"
+      - generic [ref=f4e40]:
+        - link "Уязвимости" [ref=f4e41] [cursor=pointer]:
+          - /url: /findings
+        - tooltip "Уязвимости"
+  - banner [ref=f4e44]:
+    - generic [ref=f4e45]: Конфигурации агентов
+    - generic [ref=f4e46]: Agent Scanner · локально
+  - main [ref=f4e47]:
+    - generic [ref=f4e49]:
+      - generic [ref=f4e50]:
+        - generic [ref=f4e51]:
+          - heading "Конфигурации агентов" [level=1] [ref=f4e52]
+          - button "Новая конфигурация" [ref=f4e54] [cursor=pointer]
+        - paragraph [ref=f4e55]: Исходный код, назначение и параметры запуска и взаимодействия тестируемого агента. Учётные данные его LLM-провайдера подхватываются из перехваченного трафика и используются при фаззинге.
+      - table [ref=f4e58]:
+        - rowgroup [ref=f4e59]:
+          - row [ref=f4e60]:
+            - columnheader "Название" [ref=f4e61]
+            - columnheader "Репозиторий" [ref=f4e62]
+            - columnheader "Ветка" [ref=f4e63]
+            - columnheader "Переменные" [ref=f4e64]
+            - columnheader "Взаимодействие" [ref=f4e65]
+            - columnheader [ref=f4e66]
+        - rowgroup [ref=f4e67]:
+          - row [ref=f4e68]:
+            - cell "Нет конфигураций." [ref=f4e69]

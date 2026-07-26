@@ -77,7 +77,7 @@ export function FuzzRunDetail() {
   }
 
   if (!fuzzRun) {
-    return <div style={{ padding: "var(--space-5)", color: "var(--text-500)" }}>Загрузка…</div>;
+    return <div style={{ padding: "2.4rem", color: "var(--text-500)" }}>Загрузка…</div>;
   }
 
   return (
@@ -85,16 +85,18 @@ export function FuzzRunDetail() {
       <PageHeader
         title={fuzzRun.name}
         description={campaign ? `сканирование: ${campaign.name} (${campaign.session_id})` : undefined}
-        actions={<Link to="/fuzz-runs" className="btn btn-secondary">← К списку</Link>}
+        actions={
+          <Link to={`/campaigns/${fuzzRun.base_campaign_id}`} className="btn btn-secondary">← К сканированию</Link>
+        }
       />
 
       {error && (
-        <div className="card" style={{ borderColor: "var(--color-danger)", marginBottom: "var(--space-4)" }}>
+        <div className="card" style={{ borderColor: "var(--status-negative)", marginBottom: "1.6rem" }}>
           {error}
         </div>
       )}
 
-      <div className="card" style={{ marginBottom: "var(--space-5)" }}>
+      <div className="card" style={{ marginBottom: "2.4rem" }}>
         <p style={{ fontSize: 13 }}>
           статус: <span className={`badge ${statusBadgeClass[fuzzRun.status] ?? "badge-neutral"}`}>
             {statusLabel[fuzzRun.status] ?? fuzzRun.status}
@@ -119,11 +121,11 @@ export function FuzzRunDetail() {
           <thead>
             <tr>
               <th>#</th>
-              <th>Сид-шаблон</th>
+              <th>Исходный шаблон</th>
               <th>Стратегия</th>
               <th>Детектор</th>
               <th>Судья</th>
-              <th>Reward</th>
+              <th>Награда</th>
               <th>Успех</th>
             </tr>
           </thead>
@@ -148,7 +150,7 @@ export function FuzzRunDetail() {
               </tr>
             ))}
             {attempts.length === 0 && (
-              <tr><td colSpan={7} style={{ color: "var(--color-text-muted)" }}>Попыток пока нет.</td></tr>
+              <tr><td colSpan={7} style={{ color: "var(--text-600)" }}>Попыток пока нет.</td></tr>
             )}
           </tbody>
         </table>

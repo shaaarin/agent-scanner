@@ -65,8 +65,6 @@ services:
 
   launcher:
     build: ./launcher
-    ports:
-      - "8400:8000"
     environment:
       CONTROL_API_URL: http://control-api:8000
       MITM_CONTROL_API_URL: http://control-api-mitm-bridge:8000
@@ -82,10 +80,23 @@ services:
       control-api:
         condition: service_healthy
 
+  # launcher itself must stay dual-homed (default + kind, for k8s API access),
+  # which makes ITS OWN host-published port flaky on this dev setup (see
+  # CLAUDE.md) -- this single-homed bridge owns the host-published port
+  # instead and forwards to launcher over the (reliable) default network,
+  # the same "keep the thing the host actually hits off the flaky dual-homed
+  # network" fix control-api-mitm-bridge already applies, just aimed at the
+  # host side instead of the kind side.
+  launcher-mitm-bridge:
+    image: alpine/socat
+    command: "TCP-LISTEN:8000,fork,reuseaddr TCP:launcher:8000"
+    ports:
+      - "8400:8000"
+    depends_on:
+      - launcher
+
   interactor:
     build: ./interactor
-    ports:
-      - "8500:8000"
     environment:
       CONTROL_API_URL: http://control-api:8000
       KUBECONFIG: /kubeconfig/config
@@ -97,6 +108,16 @@ services:
     depends_on:
       control-api:
         condition: service_healthy
+
+  # Same fix as launcher-mitm-bridge above, for interactor's own dual-homed
+  # host port (hit by ScanDetail.tsx's "Run interactor" button).
+  interactor-mitm-bridge:
+    image: alpine/socat
+    command: "TCP-LISTEN:8000,fork,reuseaddr TCP:interactor:8000"
+    ports:
+      - "8500:8000"
+    depends_on:
+      - interactor
 
 networks:
   default: {}

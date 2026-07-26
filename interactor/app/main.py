@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from app import control_client, llm_client
-from app.target_client import LangGraphSession, send_via_api
+from app.target_client import LangGraphSession, TargetAgentError, send_via_api
 
 app = FastAPI(title="agent-scanner interactor")
 
@@ -79,15 +79,15 @@ async def run(req: RunRequest):
 
     langgraph_session: LangGraphSession | None = None
 
-    if interaction_mode == "langgraph":
-        if not agent_config.get("langgraph_config"):
-            raise HTTPException(status_code=400, detail="agent config has no langgraph_config set")
-        langgraph_session = LangGraphSession(agent_config["langgraph_config"])
-        await langgraph_session.start()
-
     transcript: list[dict] = []
     success_detected = False
     try:
+        if interaction_mode == "langgraph":
+            if not agent_config.get("langgraph_config"):
+                raise HTTPException(status_code=400, detail="agent config has no langgraph_config set")
+            langgraph_session = LangGraphSession(agent_config["langgraph_config"])
+            await langgraph_session.start()
+
         for _ in range(req.max_turns):
             next_message = await _generate_persona_message(campaign, agent_config, llm_model, transcript)
             transcript.append({"speaker": "interactor", "text": next_message})
@@ -101,6 +101,8 @@ async def run(req: RunRequest):
             success_detected = await control_client.has_success(campaign["session_id"])
             if success_detected:
                 break
+    except TargetAgentError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
     finally:
         if langgraph_session is not None:
             await langgraph_session.close()
@@ -142,19 +144,22 @@ async def session_turn(req: SessionTurnRequest):
         llm_model = await control_client.get_llm_model(campaign["interactor_llm_model_id"])
         message = await _generate_persona_message(campaign, agent_config, llm_model, req.transcript)
 
-    if interaction_mode == "api":
-        reply = await send_via_api(agent_config["api_config"], message)
-        return {"session_token": None, "message_sent": message, "reply": reply}
-
-    if not agent_config.get("langgraph_config"):
-        raise HTTPException(status_code=400, detail="agent config has no langgraph_config set")
-    session = LangGraphSession(agent_config["langgraph_config"])
     try:
-        await session.start(existing_thread_id=req.session_token)
-        reply = await session.send(message)
-        return {"session_token": session.thread_id, "message_sent": message, "reply": reply}
-    finally:
-        # never delete the thread here -- it must survive for a later
-        # /session/turn call to resume it (each call gets its own
-        # LangGraphSession instance and closes only its own httpx client).
-        await session.close(delete_thread=False)
+        if interaction_mode == "api":
+            reply = await send_via_api(agent_config["api_config"], message)
+            return {"session_token": None, "message_sent": message, "reply": reply}
+
+        if not agent_config.get("langgraph_config"):
+            raise HTTPException(status_code=400, detail="agent config has no langgraph_config set")
+        session = LangGraphSession(agent_config["langgraph_config"])
+        try:
+            await session.start(existing_thread_id=req.session_token)
+            reply = await session.send(message)
+            return {"session_token": session.thread_id, "message_sent": message, "reply": reply}
+        finally:
+            # never delete the thread here -- it must survive for a later
+            # /session/turn call to resume it (each call gets its own
+            # LangGraphSession instance and closes only its own httpx client).
+            await session.close(delete_thread=False)
+    except TargetAgentError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc

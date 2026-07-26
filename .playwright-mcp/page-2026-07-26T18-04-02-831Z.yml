@@ -1,0 +1,67 @@
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - link [ref=e5] [cursor=pointer]:
+      - /url: /
+      - img "MIEM" [ref=e7]
+    - navigation [ref=e8]:
+      - generic [ref=e9]:
+        - link "Главная" [ref=e10] [cursor=pointer]:
+          - /url: /
+        - tooltip "Главная"
+      - generic [ref=e14]:
+        - link "Сканирования" [ref=e15] [cursor=pointer]:
+          - /url: /campaigns
+        - tooltip "Сканирования"
+      - generic [ref=e19]:
+        - link "Атаки" [ref=e20] [cursor=pointer]:
+          - /url: /attack-prompts
+        - tooltip "Атаки"
+      - generic [ref=e24]:
+        - link "LLM-модели" [ref=e25] [cursor=pointer]:
+          - /url: /llm-models
+        - tooltip "LLM-модели"
+      - generic [ref=e30]:
+        - link "Конфигурации" [ref=e31] [cursor=pointer]:
+          - /url: /agent-configs
+        - tooltip "Конфигурации"
+      - generic [ref=e36]:
+        - link "События" [ref=e37] [cursor=pointer]:
+          - /url: /events
+        - tooltip "События"
+      - generic [ref=e40]:
+        - link "Уязвимости" [ref=e41] [cursor=pointer]:
+          - /url: /findings
+        - tooltip "Уязвимости"
+  - banner [ref=e44]:
+    - generic [ref=e45]: Главная
+    - generic [ref=e46]: Agent Scanner · локально
+  - main [ref=e47]:
+    - generic [ref=e49]:
+      - generic [ref=e50]:
+        - heading "Agent Scanner" [level=1] [ref=e52]
+        - paragraph [ref=e53]: Платформа для тестирования LLM-агентов на уязвимости к prompt-инъекциям и атакам через вызов инструментов.
+      - generic [ref=e55]:
+        - link [ref=e56] [cursor=pointer]:
+          - /url: /campaigns
+          - heading "Сканирования" [level=3] [ref=e61]
+          - paragraph [ref=e62]: Настройка и запуск сканирований тестируемого агента.
+        - link [ref=e63] [cursor=pointer]:
+          - /url: /attack-prompts
+          - heading "Атаки" [level=3] [ref=e68]
+          - paragraph [ref=e69]: "Библиотека техник атак: prompt-инъекции, джейлбрейки и другие."
+        - link [ref=e70] [cursor=pointer]:
+          - /url: /llm-models
+          - heading "LLM-модели" [level=3] [ref=e76]
+          - paragraph [ref=e77]: Подключения к LLM-провайдерам, используемые в сканированиях.
+        - link [ref=e78] [cursor=pointer]:
+          - /url: /agent-configs
+          - heading "Конфигурации агентов" [level=3] [ref=e84]
+          - paragraph [ref=e85]: Параметры запуска и взаимодействия с тестируемым агентом.
+        - link [ref=e86] [cursor=pointer]:
+          - /url: /events
+          - heading "События" [level=3] [ref=e90]
+          - paragraph [ref=e91]: Трафик, перехваченный прокси, в реальном времени.
+        - link [ref=e92] [cursor=pointer]:
+          - /url: /findings
+          - heading "Уязвимости" [level=3] [ref=e96]
+          - paragraph [ref=e97]: Обмены, в которых инъекция прошла успешно.

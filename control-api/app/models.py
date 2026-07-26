@@ -44,10 +44,39 @@ class InjectionTemplate(SQLModel, table=True):
     created_at: datetime = Field(default_factory=utcnow)
 
 
+class AttackPrompt(SQLModel, table=True):
+    """Instructions for the generator LLM on how to construct one class of
+    attack (a jailbreak/injection technique) -- editable via API/UI, the
+    single source of truth `POST /generate` and the fuzz engines' checklist
+    (`FuzzRun`/`TreeRun.attack_prompt_ids`) both draw from.
+
+    Deliberately has no `target`: the attack's *semantics* (what it's trying
+    to get the agent to do) are independent of *where* it gets delivered
+    (user_message vs tool_result) -- the same checklist entry can seed both
+    a `FuzzRun` and a `TreeRun`. The delivery target is enforced by whichever
+    engine consumes it (`fuzz_engine.py` forces `user_message`,
+    `tree_engine.py` forces `tool_result`), same as it already does for its
+    own mutation loop.
+    """
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    name: str = Field(index=True, unique=True)
+    description: str = ""
+    system_prompt: str
+    tags: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+    created_at: datetime = Field(default_factory=utcnow)
+
+
 class CampaignStatus(str, Enum):
+    """NEW (just created, nothing launched yet) -> ACTIVE (launched, proxy
+    attributes traffic to it) -> either PAUSED (halted, resumable back to
+    ACTIVE) or CANCELLED (halted, terminal) when stopped.
+    """
+
+    NEW = "new"
     ACTIVE = "active"
     PAUSED = "paused"
-    STOPPED = "stopped"
+    CANCELLED = "cancelled"
 
 
 class ProviderType(str, Enum):
@@ -136,15 +165,23 @@ class InteractorPersona(str, Enum):
 
 
 class Campaign(SQLModel, table=True):
-    """Binds an injection template to a specific agent/session being tested."""
+    """The single configuration point for one scan: an agent/session plus
+    the platform's own interactor/generator LLM roles. Never carries an
+    injection template or injects anything itself -- `proxy` only ever logs
+    traffic against it (to capture the one honest baseline exchange, see
+    generator/app/backbone.py). Actual fuzzing attempts (direct and
+    indirect, via `FuzzRun`/`TreeRun.base_campaign_id`) are direct LLM calls
+    generator makes itself against the tested agent's own real credentials
+    (`TrafficEvent.upstream_base_url`/`request_authorization`, captured by
+    `proxy` during that one baseline exchange -- see
+    generator/app/direct_llm.py) -- they never touch this Campaign, `proxy`,
+    or the live agent again after the baseline capture.
+    """
 
     id: Optional[int] = Field(default=None, primary_key=True)
     name: str = Field(index=True)
     session_id: str = Field(index=True)
-    template_id: int = Field(foreign_key="injectiontemplate.id")
-    status: CampaignStatus = CampaignStatus.PAUSED
-    injection_rate: float = 1.0
-    inject_at_occurrence: Optional[int] = None  # 1-indexed; if set, proxy injects only on this Nth target-eligible exchange for this campaign, ignoring injection_rate -- see tree_engine.py
+    status: CampaignStatus = CampaignStatus.NEW
     agent_config_id: Optional[int] = Field(default=None, foreign_key="agentconfig.id")
     interactor_llm_model_id: Optional[int] = Field(default=None, foreign_key="llmmodel.id")
     generator_llm_model_id: Optional[int] = Field(default=None, foreign_key="llmmodel.id")
@@ -179,6 +216,14 @@ class TrafficEvent(SQLModel, table=True):
     success_detected: bool = False
     detail: str = ""
     raw_excerpt: str = ""
+    # Request-direction only: the real upstream connection proxy actually
+    # intercepted (scheme+host+port) and the real `Authorization` header the
+    # agent's own LLM client sent -- captured so generator can later call
+    # that same real LLM directly with the agent's own real credentials,
+    # with nothing configured up front. See
+    # generator/app/direct_llm.py::resolve_target_credential.
+    upstream_base_url: Optional[str] = None
+    request_authorization: Optional[str] = None
     created_at: datetime = Field(default_factory=utcnow)
 
 
@@ -203,10 +248,12 @@ class FuzzRunStatus(str, Enum):
 
 class FuzzRun(SQLModel, table=True):
     """A budget-driven fuzzing search over InjectionTemplate variants against
-    one already-configured Campaign (`base_campaign_id` supplies session_id/
-    agent_config_id/interactor_llm_model_id/generator_llm_model_id -- the fuzz
-    loop clones a fresh ephemeral Campaign per iteration rather than mutating
-    the base one, see FuzzAttempt.campaign_id).
+    one already-configured Campaign (`base_campaign_id` supplies
+    agent_config_id/interactor_llm_model_id/generator_llm_model_id and the
+    one shared honest baseline exchange, see generator/app/backbone.py).
+    Every attempt is a direct LLM call generator makes itself against a
+    mutated copy of the captured baseline -- no Campaign is created per
+    attempt.
     """
 
     id: Optional[int] = Field(default=None, primary_key=True)
@@ -215,6 +262,7 @@ class FuzzRun(SQLModel, table=True):
     injection_target: InjectionTarget
     mode: FuzzMode = FuzzMode.NON_ADAPTIVE
     seed_template_ids: list[int] = Field(default_factory=list, sa_column=Column(JSON))
+    attack_prompt_ids: list[int] = Field(default_factory=list, sa_column=Column(JSON))
     judge_llm_model_id: Optional[int] = Field(default=None, foreign_key="llmmodel.id")
     max_iterations: int = 20
     stop_on_success: bool = True
@@ -226,8 +274,9 @@ class FuzzRun(SQLModel, table=True):
 
 class FuzzAttempt(SQLModel, table=True):
     """One iteration of a FuzzRun's search: which seed (bandit arm) was
-    picked, the mutated template actually delivered, the ephemeral Campaign
-    used to deliver it, and the combined detector+judge verdict.
+    picked, the mutated template actually delivered (as a direct LLM call
+    against the captured baseline, see generator/app/fuzz_engine.py), and
+    the combined detector+judge verdict.
     """
 
     id: Optional[int] = Field(default=None, primary_key=True)
@@ -235,7 +284,6 @@ class FuzzAttempt(SQLModel, table=True):
     iteration: int
     seed_template_id: int = Field(foreign_key="injectiontemplate.id")
     template_id: int = Field(foreign_key="injectiontemplate.id")
-    campaign_id: int = Field(foreign_key="campaign.id")
     mutation_strategy: str = ""
     detector_success: bool = False
     judge_score: float = 0.0
@@ -247,20 +295,26 @@ class FuzzAttempt(SQLModel, table=True):
 
 class TreeRun(SQLModel, table=True):
     """A budget-driven per-tool-call A/B fuzzing run: walks one real, clean
-    conversation (the backbone, via `base_campaign_id`) forward, then fuzzes
-    each tool-result checkpoint the backbone actually produced -- see
-    docs/architecture.md's "Injection tree" section. `base_campaign_id` must
-    have `injection_rate=0.0`/`inject_at_occurrence=None` (a genuinely clean
-    backbone); works for either `interaction_mode` (`api` or `langgraph`).
+    conversation (the backbone, via `base_campaign_id`, shared with any
+    `FuzzRun` on the same campaign -- see generator/app/backbone.py)
+    forward, then fuzzes each tool-result checkpoint the backbone actually
+    produced by mutating the captured message array at that point and
+    calling the tested agent's own LLM directly -- see
+    docs/architecture.md's "Injection tree" section.
+
+    Deliberately scoped down for now to a single external exchange for the
+    backbone (no human-in-the-loop multi-turn continuation) -- see
+    docs/architecture.md. Reversible: `ConversationNode`/`InjectionProbe` are
+    already turn-indexed, so multi-turn support can come back later without
+    a schema change here.
     """
 
     id: Optional[int] = Field(default=None, primary_key=True)
     name: str = Field(index=True)
     base_campaign_id: int = Field(foreign_key="campaign.id")
     seed_template_ids: list[int] = Field(default_factory=list, sa_column=Column(JSON))
+    attack_prompt_ids: list[int] = Field(default_factory=list, sa_column=Column(JSON))
     judge_llm_model_id: Optional[int] = Field(default=None, foreign_key="llmmodel.id")
-    max_backbone_turns: int = 10
-    max_probe_turns: int = 10
     max_checkpoints: Optional[int] = None
     attempts_per_checkpoint: int = 5
     mode: FuzzMode = FuzzMode.NON_ADAPTIVE
@@ -284,9 +338,15 @@ class ConversationNode(SQLModel, table=True):
 
 class InjectionProbe(SQLModel, table=True):
     """One fuzzing attempt at one backbone checkpoint (a tool-result
-    occurrence) -- run to its own natural completion, never injected a
-    second time. A TreeRun with attempts_per_checkpoint=5 produces up to 5
-    of these per checkpoint.
+    occurrence): the checkpoint's captured message array with that tool
+    result mutated, sent as a single direct LLM call. A TreeRun with
+    attempts_per_checkpoint=5 produces up to 5 of these per checkpoint.
+
+    `trajectory` holds the single request/response pair of that direct call
+    (`[{"request": <mutated body>, "response": <raw completion>}]`) -- kept
+    as a list for shape continuity with its earlier multi-turn meaning, but
+    always length 1 now (each probe is one direct call, not a re-driven
+    multi-turn conversation).
     """
 
     id: Optional[int] = Field(default=None, primary_key=True)
@@ -295,7 +355,6 @@ class InjectionProbe(SQLModel, table=True):
     attempt_index: int
     seed_template_id: int = Field(foreign_key="injectiontemplate.id")
     template_id: int = Field(foreign_key="injectiontemplate.id")
-    campaign_id: int = Field(foreign_key="campaign.id")
     tool_name: str = ""
     original_tool_result: str = ""
     injected_tool_result: str = ""

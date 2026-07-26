@@ -67,7 +67,7 @@ export function LLMModels() {
     <div>
       <PageHeader
         title="LLM-модели"
-        description="Подключения к LLM-провайдерам: провайдер, модель, базовый URL и API-ключ. Поддерживается любой провайдер через LiteLLM. Каждое сканирование выбирает отдельную модель для генератора и интерактора."
+        description="Подключения к LLM-провайдерам — любым, совместимым с OpenAI API."
         actions={
           <button className="btn" onClick={() => (showForm ? handleCancel() : setShowForm(true))}>
             {showForm ? "Отмена" : "Добавить модель"}
@@ -76,18 +76,18 @@ export function LLMModels() {
       />
 
       {error && (
-        <div className="card" style={{ borderColor: "var(--color-danger)", marginBottom: "var(--space-4)" }}>
+        <div className="card" style={{ borderColor: "var(--status-negative)", marginBottom: "1.6rem" }}>
           {error}
         </div>
       )}
 
       {showForm && (
-        <form className="card" onSubmit={handleSubmit} style={{ marginBottom: "var(--space-5)" }}>
+        <form className="card" onSubmit={handleSubmit} style={{ marginBottom: "2.4rem" }}>
           <div className="field">
             <label>Название</label>
             <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required />
           </div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 2fr", gap: "var(--space-4)" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 2fr", gap: "1.6rem" }}>
             <div className="field">
               <label>Провайдер</label>
               <select value={form.provider_type} onChange={(e) => setForm({ ...form, provider_type: e.target.value as ProviderType })}>
@@ -137,15 +137,17 @@ export function LLMModels() {
                 <td><code>{m.model}</code></td>
                 <td style={{ color: "var(--text-600)" }}>{m.base_url}</td>
                 <td><code>{maskApiKey(m.api_key_masked)}</code></td>
-                <td style={{ display: "flex", gap: 8 }}>
-                  <button className="btn btn-secondary" onClick={() => handleEdit(m)}>Изменить</button>
-                  <button className="btn btn-secondary" onClick={() => handleDelete(m.id)}>Удалить</button>
+                <td>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <button className="btn btn-secondary" onClick={() => handleEdit(m)}>Изменить</button>
+                    <button className="btn btn-secondary" onClick={() => handleDelete(m.id)}>Удалить</button>
+                  </div>
                 </td>
               </tr>
             ))}
             {llmModels.length === 0 && (
               <tr>
-                <td colSpan={6} style={{ color: "var(--color-text-muted)" }}>Нет подключений.</td>
+                <td colSpan={6} style={{ color: "var(--text-600)" }}>Нет подключений.</td>
               </tr>
             )}
           </tbody>

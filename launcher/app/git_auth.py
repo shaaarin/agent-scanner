@@ -1,8 +1,17 @@
 """Embeds a Personal Access Token into an HTTPS git URL for private-repo
-clones (`https://<token>@host/org/repo.git`), the convention GitHub/GitLab/
-Bitbucket all accept for PAT-based auth over HTTPS. Used by both build.py's
-in-cluster git-clone init container and env_discovery.py's local shallow
-clone, so both build sources agree on how a private repo gets authenticated.
+clones (`https://oauth2:<token>@host/org/repo.git`) -- GitLab's documented
+PAT-over-HTTPS convention (a non-empty placeholder username, token as the
+password); GitHub also accepts this shape (it doesn't validate the username
+at all when a valid token is supplied as the password). Used by both
+build.py's in-cluster git-clone init container, env_discovery.py's local
+shallow clone, and repo_inspect.py's wizard-driven branch/tree lookups, so
+all three agree on how a private repo gets authenticated.
+
+Earlier version put the token in the *username* slot with no password
+(`https://<token>@host`) -- GitHub tolerates that, but GitLab (confirmed
+against a real self-hosted instance) rejects it as anonymous and falls back
+to an interactive credential prompt, which fails hard in a non-interactive
+subprocess ("could not read Username ... No such device or address").
 
 Known, accepted MVP tech debt (same posture as LLMModel.api_key -- plain
 text, not encrypted at rest): the token ends up as a literal argument to
@@ -12,7 +21,9 @@ logs (`kubectl logs .../clone`), visible to anyone with log access to the
 scan namespace. Not solved in this pass -- a k8s Secret + git credential
 helper would avoid it, at real added complexity.
 """
-from urllib.parse import urlparse, urlunparse
+from urllib.parse import quote, urlparse, urlunparse
+
+PAT_USERNAME_PLACEHOLDER = "oauth2"
 
 
 def authenticated_git_url(git_repo_url: str, access_token: str | None) -> str:
@@ -25,7 +36,7 @@ def authenticated_git_url(git_repo_url: str, access_token: str | None) -> str:
     if parsed.scheme not in ("http", "https"):
         return git_repo_url
 
-    netloc = f"{access_token}@{parsed.hostname}"
+    netloc = f"{PAT_USERNAME_PLACEHOLDER}:{quote(access_token, safe='')}@{parsed.hostname}"
     if parsed.port:
         netloc += f":{parsed.port}"
     return urlunparse(parsed._replace(netloc=netloc))

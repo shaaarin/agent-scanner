@@ -1,144 +1,14 @@
-"""Parsing/injection helpers for the OpenAI /v1/chat/completions format."""
+"""Streaming/parsing helpers for the OpenAI /v1/chat/completions format.
+
+proxy is capture-only now (see addon.py) -- the injection/detection helpers
+that used to live here moved to generator/app/injection_apply.py,
+success_detector.py, response_helpers.py, since fuzzing attempts are direct
+LLM calls generator makes itself, not live traffic proxy intercepts. Only
+the streaming-reconstruction helpers, still needed to log a complete body
+for streamed backbone responses, stay here.
+"""
 import json
-from typing import Any, Optional
-
-
-def _find_last_message(messages: list[dict], role: str) -> Optional[dict]:
-    for message in reversed(messages):
-        if message.get("role") == role:
-            return message
-    return None
-
-
-TARGET_TO_ROLE = {
-    "user_message": "user",
-    "tool_result": "tool",
-    "system_prompt": "system",
-}
-
-
-def apply_text_mutation(original: str, payload: str, mode: str) -> str:
-    if mode == "append":
-        return f"{original}\n{payload}"
-    if mode == "prepend":
-        return f"{payload}\n{original}"
-    if mode == "replace":
-        return payload
-    raise ValueError(f"unknown injection mode: {mode}")
-
-
-def has_matching_message(body: dict, target: str) -> bool:
-    """Whether `body` is eligible for a request-side injection at `target`,
-    without mutating anything -- used to count occurrences for
-    Campaign.inject_at_occurrence before deciding whether to actually inject.
-    """
-    role = TARGET_TO_ROLE.get(target)
-    if role is None:
-        return False
-    return _find_last_message(body.get("messages", []), role) is not None
-
-
-def inject_request(body: dict, target: str, mode: str, payload: str) -> bool:
-    """Mutates `body` in place for a request-side injection target.
-
-    Returns True if an injection was actually applied (a matching message existed).
-    """
-    role = TARGET_TO_ROLE.get(target)
-    if role is None:
-        return False
-    messages = body.get("messages", [])
-    message = _find_last_message(messages, role)
-    if message is None:
-        return False
-    content = message.get("content")
-    if isinstance(content, str):
-        message["content"] = apply_text_mutation(content, payload, mode)
-        return True
-    if isinstance(content, list):
-        # content-block form: mutate/append a text block
-        text_blocks = [b for b in content if isinstance(b, dict) and b.get("type") == "text"]
-        if text_blocks:
-            block = text_blocks[-1]
-            block["text"] = apply_text_mutation(block.get("text", ""), payload, mode)
-        else:
-            content.append({"type": "text", "text": payload})
-        return True
-    return False
-
-
-def _parse_tool_call_payload(payload: str) -> Optional[dict]:
-    try:
-        parsed = json.loads(payload)
-    except (json.JSONDecodeError, TypeError):
-        return None
-    if isinstance(parsed, dict) and "name" in parsed:
-        return parsed
-    return None
-
-
-def inject_response(body: dict, mode: str, payload: str) -> bool:
-    """Mutates a non-streamed chat-completion response body for the
-    assistant_response injection target.
-
-    If `payload` parses as a JSON object with a "name" key, it is treated as a
-    fabricated tool call and spliced into message.tool_calls. Otherwise it is
-    treated as plain text and applied to message.content.
-    """
-    choices = body.get("choices") or []
-    if not choices:
-        return False
-    message = choices[0].setdefault("message", {})
-
-    tool_call_spec = _parse_tool_call_payload(payload)
-    if tool_call_spec is not None:
-        tool_calls = message.setdefault("tool_calls", [])
-        fabricated = {
-            "id": f"call_injected_{len(tool_calls)}",
-            "type": "function",
-            "function": {
-                "name": tool_call_spec.get("name", ""),
-                "arguments": json.dumps(tool_call_spec.get("arguments", {})),
-            },
-        }
-        if mode == "replace":
-            message["tool_calls"] = [fabricated]
-        else:
-            tool_calls.append(fabricated)
-        choices[0]["finish_reason"] = "tool_calls"
-        return True
-
-    content = message.get("content") or ""
-    message["content"] = apply_text_mutation(content, payload, mode)
-    return True
-
-
-def iter_tool_calls(response_body: dict) -> list[dict]:
-    choices = response_body.get("choices") or []
-    if not choices:
-        return []
-    message = choices[0].get("message", {})
-    return message.get("tool_calls") or []
-
-
-def get_response_text(response_body: dict) -> str:
-    choices = response_body.get("choices") or []
-    if not choices:
-        return ""
-    message = choices[0].get("message", {})
-    return message.get("content") or ""
-
-
-def iter_tool_result_texts(request_body: dict) -> list[str]:
-    """Content strings from prior `role: tool` messages in the conversation
-    history -- i.e. what tools already returned to the agent in this thread.
-    """
-    texts = []
-    for message in request_body.get("messages", []):
-        if message.get("role") == "tool":
-            content = message.get("content")
-            if isinstance(content, str):
-                texts.append(content)
-    return texts
+from typing import Any
 
 
 def is_streaming_request(body: dict) -> bool:
@@ -147,8 +17,7 @@ def is_streaming_request(body: dict) -> bool:
 
 class StreamAccumulator:
     """Reassembles OpenAI SSE chat-completion chunks into a final message
-    shape compatible with iter_tool_calls/get_response_text, for detection
-    purposes only. Does not support rewriting the stream in this MVP.
+    shape, purely so the complete body can be logged as a TrafficEvent.
     """
 
     def __init__(self) -> None:

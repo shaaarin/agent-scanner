@@ -1,10 +1,4 @@
-/* Design tokens modeled directly on cabinet.miem.hse.ru's real CSS custom
-   properties (font Onest, brand-pumpkin orange accent, black-opacity text
-   scale, 1.2-2rem border-radius scale, soft shadows). Values pulled from
-   the site's own stylesheet, renamed for this project. */
-
 :root {
-  /* rem base: 1rem = 10px, matching the source site's `font-size: 62.5%` */
   font-size: 62.5%;
 
   --brand: #ff6d00;
@@ -71,20 +65,4 @@
   --font-caption-m-line: 2rem;
   --font-caption-s-size: 1.2rem;
   --font-caption-s-line: 1.6rem;
-
-  /* Compatibility aliases for pages written against the earlier
-     placeholder token names, now pointed at the real MIEM values above. */
-  --color-nav-bg: var(--background-base);
-  --color-nav-text: var(--text-1000);
-  --color-nav-text-muted: var(--text-500);
-  --color-accent: var(--brand);
-  --color-danger: var(--status-negative);
-  --color-text-muted: var(--text-600);
-  --radius-sm: var(--radius-s);
-  --shadow-card: 0 0 var(--shadow-1-blur) 0 var(--shadow-1);
-  --shadow-card-hover: 0 0.4rem 1.2rem 0 var(--shadow-2);
-  --space-3: 12px;
-  --space-4: 16px;
-  --space-5: 24px;
-  --space-6: 32px;
 }

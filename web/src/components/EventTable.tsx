@@ -23,7 +23,7 @@ export function EventTable({ events }: { events: TrafficEvent[] }) {
         <tbody>
           {events.map((e) => (
             <tr key={e.id}>
-              <td style={{ fontSize: 12, color: "var(--color-text-muted)", whiteSpace: "nowrap" }}>
+              <td style={{ fontSize: 12, color: "var(--text-600)", whiteSpace: "nowrap" }}>
                 {new Date(e.created_at).toLocaleTimeString()}
               </td>
               <td><code>{e.session_id}</code></td>
@@ -48,7 +48,7 @@ export function EventTable({ events }: { events: TrafficEvent[] }) {
           ))}
           {events.length === 0 && (
             <tr>
-              <td colSpan={7} style={{ color: "var(--color-text-muted)" }}>Событий нет.</td>
+              <td colSpan={7} style={{ color: "var(--text-600)" }}>Событий нет.</td>
             </tr>
           )}
         </tbody>

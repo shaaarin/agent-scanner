@@ -24,8 +24,11 @@ def create_tree_run(payload: TreeRunCreate, session: Session = Depends(get_sessi
 
 
 @router.get("", response_model=list[TreeRun])
-def list_tree_runs(session: Session = Depends(get_session)):
-    return session.exec(select(TreeRun)).all()
+def list_tree_runs(base_campaign_id: Optional[int] = None, session: Session = Depends(get_session)):
+    query = select(TreeRun)
+    if base_campaign_id is not None:
+        query = query.where(TreeRun.base_campaign_id == base_campaign_id)
+    return session.exec(query).all()
 
 
 @router.get("/{tree_run_id}", response_model=TreeRun)

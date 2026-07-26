@@ -1,0 +1,66 @@
+- generic [ref=f3e3]:
+  - complementary [ref=f3e4]:
+    - link [ref=f3e5] [cursor=pointer]:
+      - /url: /
+      - img "MIEM" [ref=f3e7]
+    - navigation [ref=f3e8]:
+      - generic [ref=f3e9]:
+        - link "Главная" [ref=f3e10] [cursor=pointer]:
+          - /url: /
+        - tooltip "Главная"
+      - generic [ref=f3e14]:
+        - link "Сканирования" [ref=f3e15] [cursor=pointer]:
+          - /url: /campaigns
+        - tooltip "Сканирования"
+      - generic [ref=f3e19]:
+        - link "Атаки" [ref=f3e20] [cursor=pointer]:
+          - /url: /attack-prompts
+        - tooltip "Атаки"
+      - generic [ref=f3e24]:
+        - link "LLM-модели" [ref=f3e25] [cursor=pointer]:
+          - /url: /llm-models
+        - tooltip "LLM-модели"
+      - generic [ref=f3e30]:
+        - link "Конфигурации" [ref=f3e31] [cursor=pointer]:
+          - /url: /agent-configs
+        - tooltip "Конфигурации"
+      - generic [ref=f3e36]:
+        - link "События" [ref=f3e37] [cursor=pointer]:
+          - /url: /events
+        - tooltip "События"
+      - generic [ref=f3e40]:
+        - link "Уязвимости" [ref=f3e41] [cursor=pointer]:
+          - /url: /findings
+        - tooltip "Уязвимости"
+  - banner [ref=f3e44]:
+    - generic [ref=f3e45]: LLM-модели
+    - generic [ref=f3e46]: Agent Scanner · локально
+  - main [ref=f3e47]:
+    - generic [ref=f3e49]:
+      - generic [ref=f3e50]:
+        - generic [ref=f3e51]:
+          - heading "LLM-модели" [level=1] [ref=f3e52]
+          - button "Добавить модель" [ref=f3e54] [cursor=pointer]
+        - paragraph [ref=f3e55]: Подключения к LLM-провайдерам — любым, совместимым с OpenAI API.
+      - table [ref=f3e58]:
+        - rowgroup [ref=f3e59]:
+          - row [ref=f3e60]:
+            - columnheader "Название" [ref=f3e61]
+            - columnheader "Тип" [ref=f3e62]
+            - columnheader "Модель" [ref=f3e63]
+            - columnheader "Базовый URL" [ref=f3e64]
+            - columnheader "API-ключ" [ref=f3e65]
+            - columnheader [ref=f3e66]
+        - rowgroup [ref=f3e67]:
+          - row [ref=f3e68]:
+            - cell [ref=f3e69]:
+              - strong [ref=f3e70]: openrouter/free
+            - cell "openai" [ref=f3e71]
+            - cell [ref=f3e73]:
+              - code [ref=f3e74]: openrouter/free
+            - cell "https://openrouter.ai/api/v1" [ref=f3e75]
+            - cell [ref=f3e76]:
+              - code [ref=f3e77]: sk••••d0
+            - cell [ref=f3e78]:
+              - button "Изменить" [ref=f3e79] [cursor=pointer]
+              - button "Удалить" [ref=f3e80] [cursor=pointer]

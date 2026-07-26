@@ -20,7 +20,7 @@ function Excerpt({ text }: { text: string }) {
   if (!text) return null;
   return (
     <details>
-      <summary style={{ cursor: "pointer", fontSize: 12, color: "var(--color-text-muted)" }}>
+      <summary style={{ cursor: "pointer", fontSize: 12, color: "var(--text-600)" }}>
         тело ({text.length} симв.)
       </summary>
       <pre
@@ -86,7 +86,7 @@ export function FlowTimeline({ events }: { events: TrafficEvent[] }) {
 
   if (flows.length === 0) {
     return (
-      <div className="card" style={{ color: "var(--color-text-muted)" }}>
+      <div className="card" style={{ color: "var(--text-600)" }}>
         Трафик ещё не поступал.
       </div>
     );
@@ -110,10 +110,10 @@ export function FlowTimeline({ events }: { events: TrafficEvent[] }) {
             }}
           >
             <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
-              <span style={{ fontSize: 12, color: "var(--color-text-muted)" }}>
+              <span style={{ fontSize: 12, color: "var(--text-600)" }}>
                 {new Date(flow.timestamp).toLocaleTimeString()}
               </span>
-              <code style={{ fontSize: 11, color: "var(--color-text-muted)" }}>{flow.flowId.slice(0, 8)}</code>
+              <code style={{ fontSize: 11, color: "var(--text-600)" }}>{flow.flowId.slice(0, 8)}</code>
               {injected ? (
                 <span className="badge badge-warning">инъекция → {flow.request?.injection_target}</span>
               ) : (
@@ -132,7 +132,7 @@ export function FlowTimeline({ events }: { events: TrafficEvent[] }) {
                 {flow.request ? (
                   <Excerpt text={flow.request.raw_excerpt} />
                 ) : (
-                  <span style={{ fontSize: 12, color: "var(--color-text-muted)" }}>—</span>
+                  <span style={{ fontSize: 12, color: "var(--text-600)" }}>—</span>
                 )}
               </div>
               <div>
@@ -143,7 +143,7 @@ export function FlowTimeline({ events }: { events: TrafficEvent[] }) {
                     <DetectionChips detail={flow.response.detail} />
                   </>
                 ) : (
-                  <span style={{ fontSize: 12, color: "var(--color-text-muted)" }}>— (ожидание)</span>
+                  <span style={{ fontSize: 12, color: "var(--text-600)" }}>— (ожидание)</span>
                 )}
               </div>
             </div>

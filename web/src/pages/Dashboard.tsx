@@ -10,10 +10,10 @@ const tiles: { to: string; label: string; description: string; icon: IconName }[
     icon: "scans",
   },
   {
-    to: "/templates",
-    label: "Шаблоны инъекций",
-    description: "Библиотека атакующих payload-ов для различных целей.",
-    icon: "templates",
+    to: "/attack-prompts",
+    label: "Атаки",
+    description: "Библиотека техник атак: prompt-инъекции, джейлбрейки и другие.",
+    icon: "attacks",
   },
   {
     to: "/llm-models",
@@ -52,7 +52,7 @@ export function Dashboard() {
         style={{
           display: "grid",
           gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))",
-          gap: "var(--space-5)",
+          gap: "2.4rem",
         }}
       >
         {tiles.map((tile) => (

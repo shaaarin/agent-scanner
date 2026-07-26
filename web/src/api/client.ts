@@ -29,19 +29,7 @@ function makeClient(baseUrl: string) {
   };
 }
 
-// control-api: campaigns, templates, credentials, agent-configs, events.
 export const api = makeClient(import.meta.env.VITE_CONTROL_API_URL ?? "http://localhost:8000");
-
-// launcher: builds/launches the tested agent as a k8s Pod (see docs/architecture.md
-// Phase 6). Only reachable if the deployment wires up the launcher's host-published
-// port -- see the networking caveat in docs/running-locally.md.
 export const launcherApi = makeClient(import.meta.env.VITE_LAUNCHER_URL ?? "http://localhost:8400");
-
-// interactor: drives a conversation with the tested agent (see docs/architecture.md
-// Phase 7). Same networking caveat as launcherApi.
 export const interactorApi = makeClient(import.meta.env.VITE_INTERACTOR_URL ?? "http://localhost:8500");
-
-// generator: attack-class generation/mutation/adaptation, plus the one-shot fuzz
-// engine (/fuzz/{id}/start|stop) and the injection tree (/tree/{id}/start|stop) --
-// see docs/architecture.md's "Fuzz engine" and "Injection tree" sections.
 export const generatorApi = makeClient(import.meta.env.VITE_GENERATOR_URL ?? "http://localhost:8300");

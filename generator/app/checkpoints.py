@@ -12,14 +12,15 @@ import json
 def checkpoints_from_events(events: list[dict]) -> list[dict]:
     """`events`: TrafficEvents for one campaign, any order (re-sorted here by
     created_at). Returns checkpoints in chronological order:
-    [{"occurrence_index": 1, "tool_name": ..., "tool_result": ...}, ...] --
-    1-indexed, matching Campaign.inject_at_occurrence's convention.
-
-    Known limitation: TrafficEvent.raw_excerpt is truncated to 4096 bytes
-    (same truncation applied everywhere else in the platform), so a request
-    body that grows past that in a long conversation may fail to parse here
-    -- such events are skipped rather than raising, so checkpoint discovery
-    degrades gracefully (fewer checkpoints found) rather than crashing a run.
+    [{"occurrence_index": 1, "tool_name": ..., "tool_result": ..., "request_body": {...}, "flow_id": ...}, ...]
+    -- 1-indexed. `request_body` is the exact captured messages array (plus
+    tools/model/etc.) as of the request where that tool result first
+    appeared as the newest one -- this is what tree_engine.py mutates and
+    replays directly to the tested LLM (see generator/app/direct_llm.py),
+    so it must be the full, untruncated body. `flow_id` matches this same
+    request's paired response TrafficEvent, letting tree_engine look up what
+    the real (clean) backbone actually decided to do right after seeing
+    this tool result, for the divergence comparison.
     """
     request_events = sorted(
         (e for e in events if e["direction"] == "request"),
@@ -52,6 +53,8 @@ def checkpoints_from_events(events: list[dict]) -> list[dict]:
                         "occurrence_index": len(checkpoints) + 1,
                         "tool_name": tool_call_names.get(message.get("tool_call_id"), ""),
                         "tool_result": content,
+                        "request_body": body,
+                        "flow_id": event["flow_id"],
                     }
                 )
         prev_tool_count = len(tool_messages)

@@ -50,14 +50,20 @@ async def get_campaign(campaign_id: int) -> dict:
     return resp.json()
 
 
-async def create_campaign(payload: dict) -> dict:
-    resp = await _client.post("/campaigns", json=payload)
+async def list_templates() -> list[dict]:
+    resp = await _client.get("/templates")
     resp.raise_for_status()
     return resp.json()
 
 
-async def list_templates() -> list[dict]:
-    resp = await _client.get("/templates")
+async def get_attack_prompt(attack_prompt_id: int) -> dict:
+    resp = await _client.get(f"/attack-prompts/{attack_prompt_id}")
+    resp.raise_for_status()
+    return resp.json()
+
+
+async def list_attack_prompts() -> list[dict]:
+    resp = await _client.get("/attack-prompts")
     resp.raise_for_status()
     return resp.json()
 

@@ -30,8 +30,11 @@ def create_fuzz_run(payload: FuzzRunCreate, session: Session = Depends(get_sessi
 
 
 @router.get("", response_model=list[FuzzRun])
-def list_fuzz_runs(session: Session = Depends(get_session)):
-    return session.exec(select(FuzzRun)).all()
+def list_fuzz_runs(base_campaign_id: Optional[int] = None, session: Session = Depends(get_session)):
+    query = select(FuzzRun)
+    if base_campaign_id is not None:
+        query = query.where(FuzzRun.base_campaign_id == base_campaign_id)
+    return session.exec(query).all()
 
 
 @router.get("/{fuzz_run_id}", response_model=FuzzRun)

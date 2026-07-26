@@ -1,7 +1,7 @@
 export type InjectionTarget = "user_message" | "tool_result" | "assistant_response" | "system_prompt";
 export type InjectionMode = "append" | "prepend" | "replace";
 export type SuccessIndicatorField = "tool_name" | "tool_arguments" | "response_text";
-export type CampaignStatus = "active" | "paused" | "stopped";
+export type CampaignStatus = "new" | "active" | "paused" | "cancelled";
 export type ProviderType = "openai" | "anthropic";
 export type InteractionMode = "none" | "api" | "langgraph";
 export type InteractorPersona = "attacker" | "benign_user";
@@ -21,13 +21,20 @@ export interface InjectionTemplate {
   created_at: string;
 }
 
+export interface AttackPrompt {
+  id: number;
+  name: string;
+  description: string;
+  system_prompt: string;
+  tags: string[];
+  created_at: string;
+}
+
 export interface Campaign {
   id: number;
   name: string;
   session_id: string;
-  template_id: number;
   status: CampaignStatus;
-  injection_rate: number;
   agent_config_id: number | null;
   interactor_llm_model_id: number | null;
   generator_llm_model_id: number | null;
@@ -55,6 +62,8 @@ export interface TrafficEvent {
   success_detected: boolean;
   detail: string;
   raw_excerpt: string;
+  upstream_base_url: string | null;
+  request_authorization: string | null;
   created_at: string;
 }
 
@@ -101,6 +110,7 @@ export interface FuzzRun {
   injection_target: InjectionTarget;
   mode: FuzzMode;
   seed_template_ids: number[];
+  attack_prompt_ids: number[];
   judge_llm_model_id: number | null;
   max_iterations: number;
   stop_on_success: boolean;
@@ -116,7 +126,6 @@ export interface FuzzAttempt {
   iteration: number;
   seed_template_id: number;
   template_id: number;
-  campaign_id: number;
   mutation_strategy: string;
   detector_success: boolean;
   judge_score: number;
@@ -131,9 +140,8 @@ export interface TreeRun {
   name: string;
   base_campaign_id: number;
   seed_template_ids: number[];
+  attack_prompt_ids: number[];
   judge_llm_model_id: number | null;
-  max_backbone_turns: number;
-  max_probe_turns: number;
   max_checkpoints: number | null;
   attempts_per_checkpoint: number;
   mode: FuzzMode;
@@ -152,9 +160,11 @@ export interface ConversationNode {
 }
 
 export interface InjectionProbeTrajectoryTurn {
-  turn_index: number;
-  message_sent: string;
-  reply: string;
+  // Always length 1: one direct chat-completion call against the
+  // checkpoint's mutated message array -- no re-driven multi-turn agent
+  // conversation anymore. Both are the raw OpenAI-shaped JSON bodies.
+  request: Record<string, unknown>;
+  response: Record<string, unknown>;
 }
 
 export interface InjectionProbe {
@@ -164,7 +174,6 @@ export interface InjectionProbe {
   attempt_index: number;
   seed_template_id: number;
   template_id: number;
-  campaign_id: number;
   tool_name: string;
   original_tool_result: string;
   injected_tool_result: string;

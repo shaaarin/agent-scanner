@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import agent_configs, campaigns, events, fuzz_runs, llm_models, templates, tree_runs
+from app.api import agent_configs, attack_prompts, campaigns, events, fuzz_runs, llm_models, templates, tree_runs
 from app.db import init_db
 from app.seed import seed_demo_data
 
@@ -15,6 +15,7 @@ app.add_middleware(
 )
 
 app.include_router(templates.router)
+app.include_router(attack_prompts.router)
 app.include_router(campaigns.router)
 app.include_router(events.router)
 app.include_router(llm_models.router)

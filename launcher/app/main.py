@@ -4,7 +4,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from app import build, ca_manager, control_client, env_discovery, namespace_manager, pod_manager
+from app import build, ca_manager, control_client, env_discovery, namespace_manager, pod_manager, repo_inspect
 from app.naming import namespace_for_session
 
 app = FastAPI(title="agent-scanner launcher")
@@ -24,6 +24,40 @@ def health():
 
 class LaunchRequest(BaseModel):
     campaign_id: int
+
+
+class RepoBranchesRequest(BaseModel):
+    git_repo_url: str
+    git_access_token: str | None = None
+
+
+class RepoInspectRequest(BaseModel):
+    git_repo_url: str
+    git_ref: str
+    git_access_token: str | None = None
+
+
+@app.post("/repo/branches")
+def repo_branches(req: RepoBranchesRequest):
+    """Lists remote branches for the AgentConfigs creation wizard's step 1
+    -- before any AgentConfig exists, so this takes the raw url/token
+    directly rather than an agent_config_id.
+    """
+    try:
+        return {"branches": repo_inspect.list_branches(req.git_repo_url, req.git_access_token)}
+    except repo_inspect.RepoInspectError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/repo/inspect")
+def repo_inspect_route(req: RepoInspectRequest):
+    """Discovers Dockerfile/.env.example candidates on a chosen branch for
+    the wizard's step 2 -- every found .env.example is parsed immediately.
+    """
+    try:
+        return repo_inspect.inspect_repo(req.git_repo_url, req.git_ref, req.git_access_token)
+    except repo_inspect.RepoInspectError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 def _patch_reachable_url(agent_config: dict, address: str) -> None:

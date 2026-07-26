@@ -2,6 +2,10 @@
 through LLM tool calling: the LLM is coaxed into passing a dangerous value
 as a tool argument (or a tool result echoes one back unescaped), rather than
 the LLM generating toxic content itself.
+
+Ported verbatim from proxy/app/vuln_signatures.py: proxy no longer performs
+any detection itself (it's capture-only now that fuzzing attempts are direct
+LLM calls, not live intercepted traffic), so this logic now runs here.
 """
 import re
 

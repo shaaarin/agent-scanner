@@ -6,6 +6,16 @@ _DEFAULT_REQUEST_BODY_TEMPLATE = {"message": "{{message}}"}
 _DEFAULT_RESPONSE_FIELD = "reply"
 
 
+class TargetAgentError(Exception):
+    """The tested agent's own HTTP surface (api_config.url or the LangGraph
+    server) rejected a request -- raised with the actual response body
+    included, since httpx.HTTPStatusError's default message only has the
+    status code and URL, not *why* (e.g. a LangGraph 422 explaining which
+    field of the request didn't match the graph's expected input schema).
+    Callers turn this into a clean HTTPException instead of an opaque 500.
+    """
+
+
 def _substitute(node: Any, message: str) -> Any:
     """Recursively replaces the "{{message}}" placeholder in string values
     of a JSON-shaped request body template with the interactor's message.
@@ -55,7 +65,10 @@ async def send_via_api(api_config: dict, message: str) -> str:
             resp = await client.get(url, params=body, headers=headers)
         else:
             resp = await client.request(method, url, json=body, headers=headers)
-    resp.raise_for_status()
+    try:
+        resp.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        raise TargetAgentError(f"agent's api endpoint returned {resp.status_code}: {resp.text[:1000]}") from exc
 
     try:
         data = resp.json()
@@ -90,7 +103,10 @@ class LangGraphSession:
             self.thread_id = existing_thread_id
             return
         resp = await self.client.post("/threads", json={})
-        resp.raise_for_status()
+        try:
+            resp.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            raise TargetAgentError(f"LangGraph server returned {resp.status_code} on POST /threads: {resp.text[:1000]}") from exc
         self.thread_id = resp.json()["thread_id"]
 
     async def send(self, message: str) -> str:
@@ -101,7 +117,13 @@ class LangGraphSession:
                 "input": {"messages": [{"role": "user", "content": message}]},
             },
         )
-        resp.raise_for_status()
+        try:
+            resp.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            raise TargetAgentError(
+                f"LangGraph server returned {resp.status_code} on POST /threads/{self.thread_id}/runs/wait "
+                f"(assistant_id={self.assistant_id!r}): {resp.text[:1000]}"
+            ) from exc
         body = resp.json()
         messages = body.get("messages") or []
         for msg in reversed(messages):

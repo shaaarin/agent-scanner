@@ -38,13 +38,24 @@ class InjectionTemplateUpdate(BaseModel):
     tags: Optional[list[str]] = None
 
 
+class AttackPromptCreate(BaseModel):
+    name: str
+    description: str = ""
+    system_prompt: str
+    tags: list[str] = []
+
+
+class AttackPromptUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    system_prompt: Optional[str] = None
+    tags: Optional[list[str]] = None
+
+
 class CampaignCreate(BaseModel):
     name: str
     session_id: str
-    template_id: int
-    status: CampaignStatus = CampaignStatus.PAUSED
-    injection_rate: float = 1.0
-    inject_at_occurrence: Optional[int] = None
+    status: CampaignStatus = CampaignStatus.NEW
     agent_config_id: Optional[int] = None
     interactor_llm_model_id: Optional[int] = None
     generator_llm_model_id: Optional[int] = None
@@ -55,8 +66,6 @@ class CampaignCreate(BaseModel):
 class CampaignUpdate(BaseModel):
     name: Optional[str] = None
     status: Optional[CampaignStatus] = None
-    injection_rate: Optional[float] = None
-    inject_at_occurrence: Optional[int] = None
     agent_config_id: Optional[int] = None
     interactor_llm_model_id: Optional[int] = None
     generator_llm_model_id: Optional[int] = None
@@ -142,6 +151,8 @@ class TrafficEventCreate(BaseModel):
     success_detected: bool = False
     detail: str = ""
     raw_excerpt: str = ""
+    upstream_base_url: Optional[str] = None
+    request_authorization: Optional[str] = None
 
 
 class FuzzRunCreate(BaseModel):
@@ -150,6 +161,7 @@ class FuzzRunCreate(BaseModel):
     injection_target: InjectionTarget
     mode: FuzzMode = FuzzMode.NON_ADAPTIVE
     seed_template_ids: list[int] = []
+    attack_prompt_ids: list[int] = []
     judge_llm_model_id: Optional[int] = None
     max_iterations: int = 20
     stop_on_success: bool = True
@@ -164,7 +176,6 @@ class FuzzAttemptCreate(BaseModel):
     iteration: int
     seed_template_id: int
     template_id: int
-    campaign_id: int
     mutation_strategy: str = ""
     detector_success: bool = False
     judge_score: float = 0.0
@@ -174,22 +185,21 @@ class FuzzAttemptCreate(BaseModel):
 
 
 class ActiveCampaignResponse(BaseModel):
+    """What `proxy` polls to attribute captured traffic to a campaign_id.
+    No template/injection fields -- proxy is capture-only, see addon.py.
+    """
+
     campaign_id: int
     session_id: str
     status: CampaignStatus
-    injection_rate: float
-    inject_at_occurrence: Optional[int] = None
-    template: InjectionTemplate
-    template_id: int
 
 
 class TreeRunCreate(BaseModel):
     name: str
     base_campaign_id: int
     seed_template_ids: list[int] = []
+    attack_prompt_ids: list[int] = []
     judge_llm_model_id: Optional[int] = None
-    max_backbone_turns: int = 10
-    max_probe_turns: int = 10
     max_checkpoints: Optional[int] = None
     attempts_per_checkpoint: int = 5
     mode: FuzzMode = FuzzMode.NON_ADAPTIVE
@@ -210,7 +220,6 @@ class InjectionProbeCreate(BaseModel):
     attempt_index: int
     seed_template_id: int
     template_id: int
-    campaign_id: int
     tool_name: str = ""
     original_tool_result: str = ""
     injected_tool_result: str = ""
