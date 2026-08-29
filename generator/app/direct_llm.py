@@ -12,6 +12,7 @@ back off that event. Never the platform's own `LLMModel` rows, which stay
 reserved for interactor/generator/judge roles -- see
 control-api/app/models.py's `LLMModel` docstring.
 """
+
 import litellm
 
 from app import llm_client
@@ -39,7 +40,11 @@ def resolve_target_credential(request_event: dict) -> dict:
     # none was captured, the direct call below will fail with that
     # endpoint's own 401 -- a legitimate attempt failure, not something to
     # preemptively block.
-    return {"base_url": base_url, "api_key": api_key or "not-required", "provider_type": "openai"}
+    return {
+        "base_url": base_url,
+        "api_key": api_key or "not-required",
+        "provider_type": "openai",
+    }
 
 
 async def call_raw_completion(credential: dict, body: dict) -> dict:
@@ -51,8 +56,13 @@ async def call_raw_completion(credential: dict, body: dict) -> dict:
     so the result is a plain dict usable by success_detector/response_helpers.
     """
     if "model" not in body:
-        raise DirectLLMError("captured request body has no \"model\" field to replay")
-    payload = {k: v for k, v in body.items() if k not in ("model", "stream")}
+        raise DirectLLMError('captured request body has no "model" field to replay')
+    # `stream_options` is only meaningful together with stream:true -- many
+    # OpenAI-compatible backends reject a non-streaming request that still
+    # carries it, which would fail every attempt for a streaming agent.
+    payload = {
+        k: v for k, v in body.items() if k not in ("model", "stream", "stream_options")
+    }
     response = await litellm.acompletion(
         model=f"{credential['provider_type']}/{body['model']}",
         api_key=credential["api_key"],

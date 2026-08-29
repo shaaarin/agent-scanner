@@ -14,24 +14,67 @@ interface Message {
   [key: string]: unknown;
 }
 
-/** The latest captured request event's `messages` array *is* the current
- * state of the whole conversation -- proxy logs the real, growing message
- * array the agent's own LLM client sends on every internal exchange, so we
- * don't need to reconstruct anything turn-by-turn ourselves. Since `events`
- * is already polled on an interval, this view updates on its own while an
- * interactor run is still in flight server-side.
+function messagesEqual(a: Message, b: Message): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+/** Whether `longer` is `shorter` plus more messages appended -- i.e. `longer`
+ * is a later snapshot of the exact same growing conversation.
  */
-function latestConversationMessages(events: TrafficEvent[]): Message[] {
+function extendsThread(shorter: Message[], longer: Message[]): boolean {
+  if (shorter.length > longer.length) return false;
+  return shorter.every((m, i) => messagesEqual(m, longer[i]));
+}
+
+interface Thread {
+  messages: Message[];
+  lastCreatedAt: string;
+}
+
+/** Re-groups request events into distinct conversation threads. More than
+ * one interactor run can share a session_id (re-running "Запустить диалог",
+ * or two runs overlapping in time), so the raw request-event stream can
+ * interleave two or more unrelated, independently-growing conversations.
+ * Each request event's `messages` array either extends an already-known
+ * thread (same conversation, later snapshot) or starts a new one -- picking
+ * by "most recent timestamp" without this grouping flips between threads
+ * and makes turns look like they randomly vanish.
+ */
+function reconstructThreads(events: TrafficEvent[]): Thread[] {
   const requests = events
     .filter((e) => e.direction === "request")
+    .slice()
     .sort((a, b) => (a.created_at < b.created_at ? -1 : 1));
-  if (requests.length === 0) return [];
-  try {
-    const body = JSON.parse(requests[requests.length - 1].raw_excerpt);
-    return Array.isArray(body.messages) ? body.messages : [];
-  } catch {
-    return [];
+
+  const threads: Thread[] = [];
+  for (const req of requests) {
+    let messages: Message[];
+    try {
+      const body = JSON.parse(req.raw_excerpt);
+      messages = Array.isArray(body.messages) ? body.messages : [];
+    } catch {
+      continue;
+    }
+    const thread = threads.find((t) => extendsThread(t.messages, messages));
+    if (thread) {
+      thread.messages = messages;
+      thread.lastCreatedAt = req.created_at;
+    } else {
+      threads.push({ messages, lastCreatedAt: req.created_at });
+    }
   }
+  return threads;
+}
+
+/** Always shows whichever reconstructed thread most recently posted a new
+ * message -- i.e. the dialogue actually in progress (or last one to run) --
+ * never a stale snapshot from an unrelated interleaved run.
+ */
+function latestConversationMessages(events: TrafficEvent[]): Message[] {
+  const threads = reconstructThreads(events);
+  if (threads.length === 0) return [];
+  threads.sort((a, b) => (a.lastCreatedAt < b.lastCreatedAt ? 1 : -1));
+  return threads[0].messages;
 }
 
 /** id -> name for every tool_call seen so far in the conversation, so a

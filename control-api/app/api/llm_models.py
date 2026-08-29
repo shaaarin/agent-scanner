@@ -37,6 +37,7 @@ def list_llm_models(session: Session = Depends(get_session)):
             base_url=m.base_url,
             api_key_masked=_mask(m.api_key),
             model=m.model,
+            created_at=m.created_at.isoformat(),
         )
         for m in llm_models
     ]

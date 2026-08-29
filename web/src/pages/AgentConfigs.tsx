@@ -134,7 +134,6 @@ export function AgentConfigs() {
     setEntrypoint(c.entrypoint ? c.entrypoint.join(" ") : "");
     setCpu((c.resources?.cpu as string) ?? "");
     setMemory((c.resources?.memory as string) ?? "");
-    setAgentPurpose(c.agent_purpose ?? "");
     const rows = Object.entries(c.env_vars).map(([key, value]) => ({ key, value }));
     setEnvRows(rows.length ? rows : emptyEnv);
     setInteractionMode(c.interaction_mode);
@@ -290,7 +289,6 @@ export function AgentConfigs() {
       entrypoint: entrypoint ? entrypoint.split(" ").filter(Boolean) : null,
       env_vars,
       resources,
-      agent_purpose: agentPurpose || null,
       interaction_mode: interactionMode,
       api_config,
       langgraph_config:

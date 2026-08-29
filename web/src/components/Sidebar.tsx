@@ -3,12 +3,10 @@ import { Icon, type IconName } from "./Icon";
 
 const items: { to: string; label: string; icon: IconName; end?: boolean }[] = [
   { to: "/", label: "Главная", icon: "home", end: true },
-  { to: "/campaigns", label: "Сканирования", icon: "scans" },
-  { to: "/attack-prompts", label: "Атаки", icon: "attacks" },
+  { to: "/scans", label: "Сканирования", icon: "scans" },
   { to: "/llm-models", label: "LLM-модели", icon: "llm" },
   { to: "/agent-configs", label: "Конфигурации", icon: "agent" },
   { to: "/events", label: "События", icon: "events" },
-  { to: "/findings", label: "Уязвимости", icon: "findings" },
 ];
 
 export function Sidebar() {

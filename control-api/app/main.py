@@ -1,7 +1,12 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import agent_configs, attack_prompts, campaigns, events, fuzz_runs, llm_models, templates, tree_runs
+from app.api import (
+    agent_configs,
+    events,
+    llm_models,
+    scans,
+)
 from app.db import init_db
 from app.seed import seed_demo_data
 
@@ -14,14 +19,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(templates.router)
-app.include_router(attack_prompts.router)
-app.include_router(campaigns.router)
 app.include_router(events.router)
 app.include_router(llm_models.router)
 app.include_router(agent_configs.router)
-app.include_router(fuzz_runs.router)
-app.include_router(tree_runs.router)
+app.include_router(scans.router)
 
 
 @app.on_event("startup")

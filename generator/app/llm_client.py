@@ -1,4 +1,5 @@
 import json
+import re
 
 import litellm
 
@@ -23,12 +24,19 @@ def _api_base(credential: dict) -> str | None:
     if not base_url:
         return None
     base_url = base_url.rstrip("/")
-    if credential.get("provider_type", "openai") == "openai" and not base_url.endswith("/v1"):
+    # Any trailing version segment counts (/v1 for OpenAI-style, /v4 for
+    # z.ai, ...) -- appending /v1 to an already-versioned URL produces
+    # /v4/v1/chat/completions, a guaranteed 404.
+    if credential.get("provider_type", "openai") == "openai" and not re.search(
+        r"/v\d+$", base_url
+    ):
         return f"{base_url}/v1"
     return base_url
 
 
-async def call_chat_completion(credential: dict, system_prompt: str, user_prompt: str) -> str:
+async def call_chat_completion(
+    credential: dict, system_prompt: str, user_prompt: str
+) -> str:
     """Calls the configured LLM via LiteLLM's unified interface -- works for
     any provider LiteLLM supports (OpenAI, Anthropic, ...) by picking the
     right model prefix from the LLMModel's provider_type, and
@@ -63,9 +71,20 @@ def parse_template_json(raw: str) -> dict:
     try:
         parsed = json.loads(text)
     except json.JSONDecodeError as exc:
-        raise GenerationError(f"LLM did not return valid JSON: {exc}\nraw: {raw}") from exc
+        raise GenerationError(
+            f"LLM did not return valid JSON: {exc}\nraw: {raw}"
+        ) from exc
 
-    required = {"name", "description", "target", "mode", "payload", "success_indicator", "success_indicator_field", "tags"}
+    required = {
+        "name",
+        "description",
+        "target",
+        "mode",
+        "payload",
+        "success_indicator",
+        "success_indicator_field",
+        "tags",
+    }
     missing = required - parsed.keys()
     if missing:
         raise GenerationError(f"LLM response missing required fields: {missing}")

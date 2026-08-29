@@ -45,23 +45,10 @@ services:
       args:
         VITE_CONTROL_API_URL: http://localhost:8000
         VITE_LAUNCHER_URL: http://localhost:8400
-        VITE_INTERACTOR_URL: http://localhost:8500
-        VITE_GENERATOR_URL: http://localhost:8300
     ports:
       - "4173:4173"
     depends_on:
       - control-api
-
-  generator:
-    build: ./generator
-    ports:
-      - "8300:8000"
-    environment:
-      CONTROL_API_URL: http://control-api:8000
-      INTERACTOR_URL: http://interactor:8000
-    depends_on:
-      control-api:
-        condition: service_healthy
 
   launcher:
     build: ./launcher
@@ -94,30 +81,6 @@ services:
       - "8400:8000"
     depends_on:
       - launcher
-
-  interactor:
-    build: ./interactor
-    environment:
-      CONTROL_API_URL: http://control-api:8000
-      KUBECONFIG: /kubeconfig/config
-    volumes:
-      - ./.kube-kind-config.yaml:/kubeconfig/config:ro
-    networks:
-      - default
-      - kind
-    depends_on:
-      control-api:
-        condition: service_healthy
-
-  # Same fix as launcher-mitm-bridge above, for interactor's own dual-homed
-  # host port (hit by ScanDetail.tsx's "Run interactor" button).
-  interactor-mitm-bridge:
-    image: alpine/socat
-    command: "TCP-LISTEN:8000,fork,reuseaddr TCP:interactor:8000"
-    ports:
-      - "8500:8000"
-    depends_on:
-      - interactor
 
 networks:
   default: {}

@@ -25,10 +25,16 @@ async def create_template(payload: dict) -> dict:
     return resp.json()
 
 
-async def list_events(campaign_id: int, success_detected: bool = False, limit: int = 20) -> list[dict]:
+async def list_events(
+    campaign_id: int, success_detected: bool = False, limit: int = 20
+) -> list[dict]:
     resp = await _client.get(
         "/events",
-        params={"campaign_id": campaign_id, "success_detected": success_detected, "limit": limit},
+        params={
+            "campaign_id": campaign_id,
+            "success_detected": success_detected,
+            "limit": limit,
+        },
     )
     resp.raise_for_status()
     return resp.json()
@@ -39,7 +45,9 @@ async def list_campaign_events(campaign_id: int, limit: int = 20) -> list[dict]:
     list_events above (which /adapt uses specifically for *unsuccessful*
     events), the fuzz engine needs both outcomes to compute its own reward.
     """
-    resp = await _client.get("/events", params={"campaign_id": campaign_id, "limit": limit})
+    resp = await _client.get(
+        "/events", params={"campaign_id": campaign_id, "limit": limit}
+    )
     resp.raise_for_status()
     return resp.json()
 
@@ -87,7 +95,12 @@ async def create_attempt(fuzz_run_id: int, payload: dict) -> dict:
 
 
 async def list_attempts(fuzz_run_id: int) -> list[dict]:
-    resp = await _client.get(f"/fuzz-runs/{fuzz_run_id}/attempts")
+    # limit=1000 (the API's max) matters for resume correctness: the fuzz
+    # engine derives its iteration counter from len() of this list, so the
+    # default limit of 100 would duplicate iterations on a >100-attempt run.
+    resp = await _client.get(
+        f"/fuzz-runs/{fuzz_run_id}/attempts", params={"limit": 1000}
+    )
     resp.raise_for_status()
     return resp.json()
 

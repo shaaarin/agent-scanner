@@ -14,10 +14,18 @@ other one just reuses it. The asyncio.Lock registry below only serializes
 that check-then-drive race within a single generator process -- acceptable
 for this MVP (single generator instance in local/dev deployment), not a
 distributed lock.
+
+More than one interactor run can share a Campaign's session_id (re-running
+"Запустить диалог", or two runs overlapping in time), so more than one
+distinct conversation can exist under one Campaign -- `ensure_backbone`
+picks exactly one thread's events to return (see conversation_threads.py),
+defaulting to whichever thread most recently posted a new message, unless
+`Campaign.backbone_anchor_event_id` pins a specific one.
 """
 import asyncio
 
 from app import control_client, interactor_client
+from app.conversation_threads import select_thread_events
 
 EVENTS_LIMIT = 1000
 
@@ -39,14 +47,17 @@ async def _captured_requests(base_campaign_id: int) -> list[dict]:
 
 
 async def ensure_backbone(base_campaign: dict) -> list[dict]:
-    """Returns the backbone's captured request-direction TrafficEvents,
-    driving the one honest exchange via interactor if none exist yet.
+    """Returns one conversation thread's captured request-direction
+    TrafficEvents (see conversation_threads.py), driving the one honest
+    exchange via interactor if none exist yet.
     """
     base_campaign_id = base_campaign["id"]
+    anchor_event_id = base_campaign.get("backbone_anchor_event_id")
     async with _lock_for(base_campaign_id):
         requests = await _captured_requests(base_campaign_id)
         if requests:
-            return requests
+            return select_thread_events(requests, anchor_event_id)
 
         await interactor_client.session_turn(base_campaign_id, session_token=None, message=None)
-        return await _captured_requests(base_campaign_id)
+        requests = await _captured_requests(base_campaign_id)
+        return select_thread_events(requests, anchor_event_id)

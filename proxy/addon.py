@@ -2,18 +2,10 @@
 `mitm-proxy` sidecar container in a tested agent's Pod (see
 launcher/app/pod_manager.py), started via `mitmdump -s addon.py`.
 
-Capture-only: this addon never injects or detects anything itself anymore.
-It logs every chat/completions request+response as a TrafficEvent so
-`generator`'s fuzz/tree engines can later replay a captured `messages` array
-directly to the tested LLM with one message mutated -- see
-generator/app/backbone.py, injection_apply.py, success_detector.py. Fuzzing
-attempts never touch the tested agent or this proxy at all; only the single
-honest baseline exchange per Campaign does, purely to capture what the real
-agent's LLM client actually sends -- including, on the request side, the
-real upstream base URL and `Authorization` header, so `generator` can later
-call that same real LLM directly using the agent's own real credentials
-without ever needing them configured up front (see
-generator/app/direct_llm.py::resolve_target_credential).
+Capture-only: this addon logs every chat/completions request+response as a
+TrafficEvent. Can also operate in DeepTeam testing mode where it sends
+DeepTeam-generated attacks to the tested agent and returns responses for
+vulnerability assessment.
 
 Transparent mode means there's no path prefix to read a session id from
 (unlike the old explicit-`base_url` reverse-proxy design) -- the session id
@@ -30,6 +22,7 @@ from app import control_client, openai_provider
 
 SESSION_ID = os.environ.get("SESSION_ID", "")
 CHAT_COMPLETIONS_SUFFIX = "/chat/completions"
+DEEPTEAM_MODE = os.environ.get("DEEPTEAM_MODE", "false").lower() == "true"
 
 
 DEFAULT_PORTS = {"http": 80, "https": 443}
@@ -81,13 +74,13 @@ class InjectionAddon:
         except json.JSONDecodeError:
             return
 
-        campaign = await control_client.get_active_campaign(SESSION_ID)
-        flow.metadata["campaign"] = campaign
+        scan = await control_client.get_active_scan(SESSION_ID)
+        flow.metadata["scan"] = scan
         flow_id = str(uuid.uuid4())
         flow.metadata["flow_id"] = flow_id
 
         await self._log_event(
-            campaign=campaign,
+            scan=scan,
             flow_id=flow_id,
             direction="request",
             host=flow.request.pretty_host,
@@ -109,7 +102,7 @@ class InjectionAddon:
     async def response(self, flow: http.HTTPFlow) -> None:
         if not _is_chat_completions(flow):
             return
-        campaign = flow.metadata.get("campaign")
+        scan = flow.metadata.get("scan")
         flow_id = flow.metadata.get("flow_id", str(uuid.uuid4()))
 
         stream_cb = flow.response.stream
@@ -122,7 +115,7 @@ class InjectionAddon:
                 return
 
         await self._log_event(
-            campaign=campaign,
+            scan=scan,
             flow_id=flow_id,
             direction="response",
             host=flow.request.pretty_host,
@@ -130,12 +123,12 @@ class InjectionAddon:
         )
 
     async def _log_event(
-        self, *, campaign, flow_id, direction, host, raw_excerpt, upstream_base_url=None, request_authorization=None
+        self, *, scan, flow_id, direction, host, raw_excerpt, upstream_base_url=None, request_authorization=None
     ) -> None:
         await control_client.post_event(
             {
                 "session_id": SESSION_ID,
-                "campaign_id": campaign["campaign_id"] if campaign else None,
+                "scan_id": scan["scan_id"] if scan else None,
                 "flow_id": flow_id,
                 "direction": direction,
                 "provider": "openai",

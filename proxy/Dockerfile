@@ -3,7 +3,7 @@ FROM python:3.12-slim
 WORKDIR /srv
 
 COPY pyproject.toml ./
-RUN pip install --no-cache-dir mitmproxy httpx
+RUN pip install --no-cache-dir mitmproxy httpx deepteam
 
 COPY app ./app
 COPY addon.py ./addon.py

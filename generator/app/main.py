@@ -45,7 +45,11 @@ async def generate(req: GenerateRequest):
     raw = await llm_client.call_chat_completion(llm_model, system_prompt, user_prompt)
     parsed = llm_client.parse_template_json(raw)
     parsed.setdefault("tags", [])
-    parsed["tags"] = [*parsed["tags"], f"attack_prompt:{req.attack_prompt_id}", "generator:llm"]
+    parsed["tags"] = [
+        *parsed["tags"],
+        f"attack_prompt:{req.attack_prompt_id}",
+        "generator:llm",
+    ]
     return await control_client.create_template(parsed)
 
 
@@ -63,18 +67,24 @@ async def mutate(req: MutateRequest):
 
     created = []
     for _ in range(req.count):
-        user_prompt = MUTATION_PROMPT.replace("__EXISTING_TEMPLATE_JSON__", json.dumps(existing)).replace(
-            "__STRATEGY_HINT__", req.strategy_hint
-        )
+        user_prompt = MUTATION_PROMPT.replace(
+            "__EXISTING_TEMPLATE_JSON__", json.dumps(existing)
+        ).replace("__STRATEGY_HINT__", req.strategy_hint)
         raw = await llm_client.call_chat_completion(llm_model, "", user_prompt)
         parsed = llm_client.parse_template_json(raw)
         parsed.setdefault("tags", [])
-        parsed["tags"] = [*parsed["tags"], f"mutated_from:{existing['id']}", "generator:llm"]
+        parsed["tags"] = [
+            *parsed["tags"],
+            f"mutated_from:{existing['id']}",
+            "generator:llm",
+        ]
         created.append(await control_client.create_template(parsed))
     return created
 
 
-def _validate_base_campaign(base_campaign: dict, judge_llm_model_id: int | None) -> None:
+def _validate_base_campaign(
+    base_campaign: dict, judge_llm_model_id: int | None
+) -> None:
     """Shared preflight for /fuzz/start and /tree/start: both engines now
     share the same one-honest-baseline-then-direct-LLM-calls delivery (see
     backbone.py/direct_llm.py), so both need the same things from the base
@@ -93,9 +103,13 @@ def _validate_base_campaign(base_campaign: dict, judge_llm_model_id: int | None)
             "currently active for a session_id",
         )
     if not base_campaign.get("agent_config_id"):
-        raise HTTPException(status_code=400, detail="base campaign has no agent_config_id set")
+        raise HTTPException(
+            status_code=400, detail="base campaign has no agent_config_id set"
+        )
     if not base_campaign.get("interactor_llm_model_id"):
-        raise HTTPException(status_code=400, detail="base campaign has no interactor_llm_model_id set")
+        raise HTTPException(
+            status_code=400, detail="base campaign has no interactor_llm_model_id set"
+        )
     if not base_campaign.get("generator_llm_model_id") and not judge_llm_model_id:
         raise HTTPException(
             status_code=400,
@@ -106,15 +120,24 @@ def _validate_base_campaign(base_campaign: dict, judge_llm_model_id: int | None)
 @app.post("/fuzz/{fuzz_run_id}/start")
 async def start_fuzz(fuzz_run_id: int):
     fuzz_run = await control_client.get_fuzz_run(fuzz_run_id)
-    if fuzz_run["status"] not in ("pending", "paused"):
-        raise HTTPException(status_code=400, detail=f"fuzz run has status={fuzz_run['status']}, cannot start")
+    # Any non-running status is startable: stopped/completed runs resume from
+    # their already-recorded attempts (a run previously killed by a transient
+    # LLM error is restartable rather than dead terminal state).
+    if fuzz_run["status"] == "running":
+        raise HTTPException(
+            status_code=400, detail=f"fuzz run has status=running, cannot start"
+        )
 
     base_campaign = await control_client.get_campaign(fuzz_run["base_campaign_id"])
     _validate_base_campaign(base_campaign, fuzz_run.get("judge_llm_model_id"))
 
     existing_task = _running_fuzz_tasks.get(fuzz_run_id)
     if existing_task and not existing_task.done():
-        raise HTTPException(status_code=409, detail="fuzz run already has an active task")
+        # Status is not "running" here, so a not-done task is a zombie still
+        # winding down (or stuck in a long backbone call) after an external
+        # stop -- cancel it instead of refusing the restart for up to the
+        # backbone call's full timeout.
+        existing_task.cancel()
 
     await control_client.update_fuzz_run(fuzz_run_id, {"status": "running"})
     task = asyncio.create_task(fuzz_engine.run_fuzz_iterations(fuzz_run_id))
@@ -133,15 +156,21 @@ async def stop_fuzz(fuzz_run_id: int):
 @app.post("/tree/{tree_run_id}/start")
 async def start_tree(tree_run_id: int):
     tree_run = await control_client.get_tree_run(tree_run_id)
-    if tree_run["status"] not in ("pending", "paused"):
-        raise HTTPException(status_code=400, detail=f"tree run has status={tree_run['status']}, cannot start")
+    # Any non-running status is startable -- same resume semantics as
+    # /fuzz/{id}/start above.
+    if tree_run["status"] == "running":
+        raise HTTPException(
+            status_code=400,
+            detail=f"tree run has status=running, cannot start",
+        )
 
     base_campaign = await control_client.get_campaign(tree_run["base_campaign_id"])
     _validate_base_campaign(base_campaign, tree_run.get("judge_llm_model_id"))
 
     existing_task = _running_tree_tasks.get(tree_run_id)
     if existing_task and not existing_task.done():
-        raise HTTPException(status_code=409, detail="tree run already has an active task")
+        # Same zombie-task reasoning as /fuzz/{id}/start above.
+        existing_task.cancel()
 
     await control_client.update_tree_run(tree_run_id, {"status": "running"})
     task = asyncio.create_task(tree_engine.run_tree(tree_run_id))

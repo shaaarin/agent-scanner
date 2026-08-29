@@ -1,3 +1,6 @@
+from datetime import datetime
+
+import asyncio
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -13,6 +16,22 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+_running_tasks: dict[int, asyncio.Task] = {}
+
+
+@app.on_event("startup")
+async def fail_stale_runs() -> None:
+    """Runs left pending/running by a previous process (restart/redeploy)
+    can never finish -- mark them failed so the UI doesn't show them as
+    executing forever.
+    """
+    for status in ("pending", "running"):
+        for run in await control_client.list_interactor_runs(status=status):
+            await control_client.patch_interactor_run(
+                run["id"],
+                {"status": "failed", "error": "interactor service restarted mid-run"},
+            )
 
 
 @app.get("/health")
@@ -43,10 +62,12 @@ def _format_transcript(transcript: list[dict]) -> str:
     return "\n".join(f"{turn['speaker']}: {turn['text']}" for turn in transcript)
 
 
-async def _generate_persona_message(campaign: dict, agent_config: dict, llm_model: dict, transcript: list[dict]) -> str:
+async def _generate_persona_message(
+    campaign: dict, agent_config: dict, llm_model: dict, transcript: list[dict]
+) -> str:
     """Asks the persona LLM for the next line, playing an ordinary real user
-    given the conversation so far -- shared by /run's loop and /session/turn's
-    message=null case.
+    given the conversation so far -- shared by the run driver's loop and
+    /session/turn's message=null case.
     """
     persona_prompt = _build_persona_prompt(campaign, agent_config)
     user_prompt = (
@@ -56,40 +77,65 @@ async def _generate_persona_message(campaign: dict, agent_config: dict, llm_mode
     return await llm_client.call_chat_completion(llm_model, persona_prompt, user_prompt)
 
 
-class RunRequest(BaseModel):
-    campaign_id: int
-    max_turns: int = 5
+async def _bind_backbone_anchor(
+    interactor_run_id: int, campaign_id: int, threads_before: set[int]
+) -> None:
+    """After a run finishes, finds the conversation thread(s) whose latest
+    captured event appeared while the run was executing (anchors not seen
+    before it started) and binds the newest one as this run's
+    backbone_anchor_event_id -- the UI's "fuzz this run" action sets
+    Campaign.backbone_anchor_event_id to it.
+    """
+    threads_after = await control_client.list_conversation_threads(campaign_id)
+    candidates = [
+        t for t in threads_after if t["anchor_event_id"] not in threads_before
+    ]
+    if not candidates:
+        return
+    newest = max(candidates, key=lambda t: t["last_created_at"])
+    await control_client.patch_interactor_run(
+        interactor_run_id, {"backbone_anchor_event_id": newest["anchor_event_id"]}
+    )
 
 
-@app.post("/run")
-async def run(req: RunRequest):
-    campaign = await control_client.get_campaign(req.campaign_id)
-
-    if not campaign.get("agent_config_id"):
-        raise HTTPException(status_code=400, detail="campaign has no agent_config_id set")
+async def _drive_run(interactor_run_id: int) -> None:
+    """Background driver for one InteractorRun: walks the persona turns,
+    persisting progress (transcript + turns_done) after every completed turn
+    so a page reload never loses state. Terminal status is written in the
+    final patch no matter how the loop exits.
+    """
+    run = await control_client.get_interactor_run(interactor_run_id)
+    campaign = await control_client.get_campaign(run["campaign_id"])
     agent_config = await control_client.get_agent_config(campaign["agent_config_id"])
-
-    interaction_mode = agent_config["interaction_mode"]
-    if interaction_mode == "none":
-        raise HTTPException(status_code=400, detail="agent config has interaction_mode=none, nothing to drive")
-
-    if not campaign.get("interactor_llm_model_id"):
-        raise HTTPException(status_code=400, detail="campaign has no interactor_llm_model_id set")
     llm_model = await control_client.get_llm_model(campaign["interactor_llm_model_id"])
+    interaction_mode = agent_config["interaction_mode"]
 
-    langgraph_session: LangGraphSession | None = None
+    threads_before = {
+        t["anchor_event_id"]
+        for t in await control_client.list_conversation_threads(campaign["id"])
+    }
+
+    await control_client.patch_interactor_run(interactor_run_id, {"status": "running"})
 
     transcript: list[dict] = []
-    success_detected = False
+    status, error = "completed", None
+    langgraph_session: LangGraphSession | None = None
     try:
         if interaction_mode == "langgraph":
             if not agent_config.get("langgraph_config"):
-                raise HTTPException(status_code=400, detail="agent config has no langgraph_config set")
+                raise RuntimeError("agent config has no langgraph_config set")
             langgraph_session = LangGraphSession(agent_config["langgraph_config"])
             await langgraph_session.start()
 
-        for _ in range(req.max_turns):
-            next_message = await _generate_persona_message(campaign, agent_config, llm_model, transcript)
+        for _ in range(run["max_turns"]):
+            current = await control_client.get_interactor_run(interactor_run_id)
+            if current["status"] != "running":
+                status = "stopped"
+                return
+
+            next_message = await _generate_persona_message(
+                campaign, agent_config, llm_model, transcript
+            )
             transcript.append({"speaker": "interactor", "text": next_message})
 
             if interaction_mode == "api":
@@ -98,51 +144,139 @@ async def run(req: RunRequest):
                 reply = await langgraph_session.send(next_message)
             transcript.append({"speaker": "agent", "text": reply})
 
-            success_detected = await control_client.has_success(campaign["session_id"])
-            if success_detected:
-                break
+            await control_client.patch_interactor_run(
+                interactor_run_id,
+                {"turns_done": len(transcript) // 2, "transcript": transcript},
+            )
+    except asyncio.CancelledError:
+        status = "stopped"
     except TargetAgentError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        status, error = "failed", str(exc)
+    except Exception as exc:
+        status, error = "failed", f"{type(exc).__name__}: {exc}"
     finally:
         if langgraph_session is not None:
             await langgraph_session.close()
+        try:
+            await _bind_backbone_anchor(
+                interactor_run_id, campaign["id"], threads_before
+            )
+        except Exception as exc:
+            print(
+                f"[interactor] failed to bind backbone anchor for run {interactor_run_id}: {exc}"
+            )
+        await control_client.patch_interactor_run(
+            interactor_run_id, {"status": status, "error": error}
+        )
 
-    return {"transcript": transcript, "turns": len(transcript) // 2, "success_detected": success_detected}
+
+class RunStartRequest(BaseModel):
+    campaign_id: int
+    max_turns: int = 5
+    name: str = ""
+
+
+@app.post("/runs")
+async def start_run(req: RunStartRequest):
+    """Creates an InteractorRun in control-api and drives it as a background
+    task, returning the row immediately -- the UI polls the run's status and
+    per-turn progress instead of holding a minutes-long HTTP request open.
+    """
+    campaign = await control_client.get_campaign(req.campaign_id)
+
+    if campaign.get("status") != "active":
+        raise HTTPException(
+            status_code=400,
+            detail="campaign must be active -- proxy only attributes captured traffic to an active campaign",
+        )
+    if not campaign.get("agent_config_id"):
+        raise HTTPException(
+            status_code=400, detail="campaign has no agent_config_id set"
+        )
+    agent_config = await control_client.get_agent_config(campaign["agent_config_id"])
+    if agent_config["interaction_mode"] == "none":
+        raise HTTPException(
+            status_code=400,
+            detail="agent config has interaction_mode=none, nothing to drive",
+        )
+    if not campaign.get("interactor_llm_model_id"):
+        raise HTTPException(
+            status_code=400, detail="campaign has no interactor_llm_model_id set"
+        )
+
+    existing = await control_client.list_interactor_runs(campaign_id=req.campaign_id)
+    if any(r["status"] in ("pending", "running") for r in existing):
+        raise HTTPException(
+            status_code=409, detail="campaign already has a running interactor run"
+        )
+
+    name = req.name or datetime.now().strftime("Запуск %d.%m %H:%M")
+    run = await control_client.create_interactor_run(
+        {"campaign_id": req.campaign_id, "name": name, "max_turns": req.max_turns}
+    )
+    _running_tasks[run["id"]] = asyncio.create_task(_drive_run(run["id"]))
+    return run
+
+
+@app.post("/runs/{interactor_run_id}/stop")
+async def stop_run(interactor_run_id: int):
+    run = await control_client.get_interactor_run(interactor_run_id)
+    if run["status"] in ("pending", "running"):
+        await control_client.patch_interactor_run(
+            interactor_run_id, {"status": "stopped"}
+        )
+        task = _running_tasks.get(interactor_run_id)
+        if task and not task.done():
+            task.cancel()
+    return {"status": "stopped"}
 
 
 class SessionTurnRequest(BaseModel):
     campaign_id: int
     session_token: str | None = None
     message: str | None = None
-    transcript: list[dict] = []  # only used to build the persona prompt when message is null
+    transcript: list[
+        dict
+    ] = []  # only used to build the persona prompt when message is null
 
 
 @app.post("/session/turn")
 async def session_turn(req: SessionTurnRequest):
     """A resumable single-turn primitive, used by generator's tree-fuzzing
-    engine to drive a conversation turn-by-turn (rather than /run's
-    all-turns-in-one-call loop) -- see docs/architecture.md's "Injection
-    tree" section. Works for either interaction_mode: `session_token` is a
-    real LangGraph thread_id for `langgraph` mode (continuing/forking a
-    branch), or ignored (always null) for `api` mode, which has no real
-    session-continuity primitive today.
+    engine to drive a conversation turn-by-turn (rather than a whole run at
+    once) -- see docs/architecture.md's "Injection tree" section. Works for
+    either interaction_mode: `session_token` is a real LangGraph thread_id
+    for `langgraph` mode (continuing/forking a branch), or ignored (always
+    null) for `api` mode, which has no real session-continuity primitive
+    today.
     """
     campaign = await control_client.get_campaign(req.campaign_id)
 
     if not campaign.get("agent_config_id"):
-        raise HTTPException(status_code=400, detail="campaign has no agent_config_id set")
+        raise HTTPException(
+            status_code=400, detail="campaign has no agent_config_id set"
+        )
     agent_config = await control_client.get_agent_config(campaign["agent_config_id"])
 
     interaction_mode = agent_config["interaction_mode"]
     if interaction_mode == "none":
-        raise HTTPException(status_code=400, detail="agent config has interaction_mode=none, nothing to drive")
+        raise HTTPException(
+            status_code=400,
+            detail="agent config has interaction_mode=none, nothing to drive",
+        )
 
     message = req.message
     if message is None:
         if not campaign.get("interactor_llm_model_id"):
-            raise HTTPException(status_code=400, detail="campaign has no interactor_llm_model_id set")
-        llm_model = await control_client.get_llm_model(campaign["interactor_llm_model_id"])
-        message = await _generate_persona_message(campaign, agent_config, llm_model, req.transcript)
+            raise HTTPException(
+                status_code=400, detail="campaign has no interactor_llm_model_id set"
+            )
+        llm_model = await control_client.get_llm_model(
+            campaign["interactor_llm_model_id"]
+        )
+        message = await _generate_persona_message(
+            campaign, agent_config, llm_model, req.transcript
+        )
 
     try:
         if interaction_mode == "api":
@@ -150,12 +284,18 @@ async def session_turn(req: SessionTurnRequest):
             return {"session_token": None, "message_sent": message, "reply": reply}
 
         if not agent_config.get("langgraph_config"):
-            raise HTTPException(status_code=400, detail="agent config has no langgraph_config set")
+            raise HTTPException(
+                status_code=400, detail="agent config has no langgraph_config set"
+            )
         session = LangGraphSession(agent_config["langgraph_config"])
         try:
             await session.start(existing_thread_id=req.session_token)
             reply = await session.send(message)
-            return {"session_token": session.thread_id, "message_sent": message, "reply": reply}
+            return {
+                "session_token": session.thread_id,
+                "message_sent": message,
+                "reply": reply,
+            }
         finally:
             # never delete the thread here -- it must survive for a later
             # /session/turn call to resume it (each call gets its own
@@ -163,3 +303,9 @@ async def session_turn(req: SessionTurnRequest):
             await session.close(delete_thread=False)
     except TargetAgentError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except Exception as exc:
+        # Same reasoning as the run driver: keep the real error visible to
+        # the browser instead of an opaque CORS-blocked 500.
+        raise HTTPException(
+            status_code=502, detail=f"{type(exc).__name__}: {exc}"
+        ) from exc

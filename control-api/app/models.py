@@ -10,75 +10,6 @@ def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
-class InjectionTarget(str, Enum):
-    USER_MESSAGE = "user_message"
-    TOOL_RESULT = "tool_result"
-    ASSISTANT_RESPONSE = "assistant_response"
-    SYSTEM_PROMPT = "system_prompt"
-
-
-class InjectionMode(str, Enum):
-    APPEND = "append"
-    PREPEND = "prepend"
-    REPLACE = "replace"
-
-
-class SuccessIndicatorField(str, Enum):
-    TOOL_NAME = "tool_name"
-    TOOL_ARGUMENTS = "tool_arguments"
-    RESPONSE_TEXT = "response_text"
-
-
-class InjectionTemplate(SQLModel, table=True):
-    """A single prompt-injection payload that can be dropped into LLM traffic."""
-
-    id: Optional[int] = Field(default=None, primary_key=True)
-    name: str = Field(index=True, unique=True)
-    description: str = ""
-    target: InjectionTarget
-    mode: InjectionMode = InjectionMode.APPEND
-    payload: str
-    success_indicator: Optional[str] = None  # regex
-    success_indicator_field: SuccessIndicatorField = SuccessIndicatorField.TOOL_NAME
-    tags: list[str] = Field(default_factory=list, sa_column=Column(JSON))
-    created_at: datetime = Field(default_factory=utcnow)
-
-
-class AttackPrompt(SQLModel, table=True):
-    """Instructions for the generator LLM on how to construct one class of
-    attack (a jailbreak/injection technique) -- editable via API/UI, the
-    single source of truth `POST /generate` and the fuzz engines' checklist
-    (`FuzzRun`/`TreeRun.attack_prompt_ids`) both draw from.
-
-    Deliberately has no `target`: the attack's *semantics* (what it's trying
-    to get the agent to do) are independent of *where* it gets delivered
-    (user_message vs tool_result) -- the same checklist entry can seed both
-    a `FuzzRun` and a `TreeRun`. The delivery target is enforced by whichever
-    engine consumes it (`fuzz_engine.py` forces `user_message`,
-    `tree_engine.py` forces `tool_result`), same as it already does for its
-    own mutation loop.
-    """
-
-    id: Optional[int] = Field(default=None, primary_key=True)
-    name: str = Field(index=True, unique=True)
-    description: str = ""
-    system_prompt: str
-    tags: list[str] = Field(default_factory=list, sa_column=Column(JSON))
-    created_at: datetime = Field(default_factory=utcnow)
-
-
-class CampaignStatus(str, Enum):
-    """NEW (just created, nothing launched yet) -> ACTIVE (launched, proxy
-    attributes traffic to it) -> either PAUSED (halted, resumable back to
-    ACTIVE) or CANCELLED (halted, terminal) when stopped.
-    """
-
-    NEW = "new"
-    ACTIVE = "active"
-    PAUSED = "paused"
-    CANCELLED = "cancelled"
-
-
 class ProviderType(str, Enum):
     OPENAI = "openai"
     ANTHROPIC = "anthropic"
@@ -86,14 +17,8 @@ class ProviderType(str, Enum):
 
 class LLMModel(SQLModel, table=True):
     """A real LLM client entered via the web UI: a provider + model + base
-    URL + API key. Used by `interactor`/`generator` (`Campaign.interactor_llm_model_id`,
-    `Campaign.generator_llm_model_id`) for the platform's own outbound LLM
-    calls, via LiteLLM (see their `llm_client.py`), so any provider LiteLLM
-    supports works. There is deliberately no "target" role here: the tested
-    agent's own LLM traffic is intercepted transparently via MITM (see
-    `launcher/app/pod_manager.py`, `proxy/addon.py`) using whatever real
-    provider config the agent itself is given via `AgentConfig.env_vars` --
-    the platform never needs to know or resolve that upstream itself.
+    URL + API key. Used for DeepTeam evaluation (LLM-as-a-Judge) via LiteLLM,
+    so any provider LiteLLM supports works.
 
     Stored in plain text for this MVP: not encrypted at rest. This is a
     known, deliberately accepted tech-debt item -- see docs/architecture.md.
@@ -133,14 +58,21 @@ class AgentConfig(SQLModel, table=True):
     name: str = Field(index=True, unique=True)
     git_repo_url: str
     git_ref: str = "main"
-    git_access_token: Optional[str] = None  # PAT for private HTTPS repos -- see launcher/app/git_auth.py. Plain text, same accepted MVP tech debt as LLMModel.api_key.
+    git_access_token: Optional[str] = (
+        None  # PAT for private HTTPS repos -- see launcher/app/git_auth.py. Plain text, same accepted MVP tech debt as LLMModel.api_key.
+    )
     dockerfile_path: str = "Dockerfile"  # path to the Dockerfile, relative to the repo root (build context is always the repo root)
-    env_example_path: Optional[str] = None  # e.g. ".env.example" -- launcher reads this to auto-fill env_vars with the repo's own declared defaults
-    api_port: Optional[int] = None  # container port the agent listens on, if any -- launcher exposes it via an auto-created NodePort Service
+    env_example_path: Optional[str] = (
+        None  # e.g. ".env.example" -- launcher reads this to auto-fill env_vars with the repo's own declared defaults
+    )
+    api_port: Optional[int] = (
+        None  # container port the agent listens on, if any -- launcher exposes it via an auto-created NodePort Service
+    )
     entrypoint: Optional[list[str]] = Field(default=None, sa_column=Column(JSON))
     env_vars: dict[str, str] = Field(default_factory=dict, sa_column=Column(JSON))
-    resources: Optional[dict] = Field(default=None, sa_column=Column(JSON))  # e.g. {"cpu": "500m", "memory": "512Mi"}
-    agent_purpose: Optional[str] = None  # what this agent is for -- context for the interactor's legit-user persona
+    resources: Optional[dict] = Field(
+        default=None, sa_column=Column(JSON)
+    )  # e.g. {"cpu": "500m", "memory": "512Mi"}
     interaction_mode: InteractionMode = InteractionMode.NONE
     # api_config (interaction_mode=api): {"url", "method", "request_body_template"
     #   (arbitrary JSON with a "{{message}}" placeholder), "response_field"
@@ -153,48 +85,6 @@ class AgentConfig(SQLModel, table=True):
     created_at: datetime = Field(default_factory=utcnow)
 
 
-class InteractorPersona(str, Enum):
-    """Only BENIGN_USER is honored by `interactor` in this iteration -- a
-    legitimate user who was given an instruction (what they're allowed to
-    do) and the agent's purpose, both via the web UI. ATTACKER is kept in
-    the schema for a future iteration but is not currently implemented.
-    """
-
-    ATTACKER = "attacker"
-    BENIGN_USER = "benign_user"
-
-
-class Campaign(SQLModel, table=True):
-    """The single configuration point for one scan: an agent/session plus
-    the platform's own interactor/generator LLM roles. Never carries an
-    injection template or injects anything itself -- `proxy` only ever logs
-    traffic against it (to capture the one honest baseline exchange, see
-    generator/app/backbone.py). Actual fuzzing attempts (direct and
-    indirect, via `FuzzRun`/`TreeRun.base_campaign_id`) are direct LLM calls
-    generator makes itself against the tested agent's own real credentials
-    (`TrafficEvent.upstream_base_url`/`request_authorization`, captured by
-    `proxy` during that one baseline exchange -- see
-    generator/app/direct_llm.py) -- they never touch this Campaign, `proxy`,
-    or the live agent again after the baseline capture.
-    """
-
-    id: Optional[int] = Field(default=None, primary_key=True)
-    name: str = Field(index=True)
-    session_id: str = Field(index=True)
-    status: CampaignStatus = CampaignStatus.NEW
-    agent_config_id: Optional[int] = Field(default=None, foreign_key="agentconfig.id")
-    interactor_llm_model_id: Optional[int] = Field(default=None, foreign_key="llmmodel.id")
-    generator_llm_model_id: Optional[int] = Field(default=None, foreign_key="llmmodel.id")
-    interactor_persona: Optional[InteractorPersona] = None
-    user_instruction: Optional[str] = None  # what the interactor's legit-user persona is allowed/told to do
-    agent_namespace: Optional[str] = None
-    agent_pod_name: Optional[str] = None
-    build_job_name: Optional[str] = None
-    built_image: Optional[str] = None
-    created_at: datetime = Field(default_factory=utcnow)
-    updated_at: datetime = Field(default_factory=utcnow)
-
-
 class EventDirection(str, Enum):
     REQUEST = "request"
     RESPONSE = "response"
@@ -205,166 +95,46 @@ class TrafficEvent(SQLModel, table=True):
 
     id: Optional[int] = Field(default=None, primary_key=True)
     session_id: str = Field(index=True)
-    campaign_id: Optional[int] = Field(default=None, foreign_key="campaign.id")
+    scan_id: Optional[int] = None  # References Scan instead of Campaign
     flow_id: str = Field(index=True)
     direction: EventDirection
     provider: str = "openai"
     host: str = ""
     path: str = ""
-    injected: bool = False
-    injection_target: Optional[str] = None
-    success_detected: bool = False
-    detail: str = ""
-    raw_excerpt: str = ""
-    # Request-direction only: the real upstream connection proxy actually
-    # intercepted (scheme+host+port) and the real `Authorization` header the
-    # agent's own LLM client sent -- captured so generator can later call
-    # that same real LLM directly with the agent's own real credentials,
-    # with nothing configured up front. See
-    # generator/app/direct_llm.py::resolve_target_credential.
-    upstream_base_url: Optional[str] = None
-    request_authorization: Optional[str] = None
     created_at: datetime = Field(default_factory=utcnow)
 
 
-class FuzzMode(str, Enum):
-    """ADAPTIVE reuses this run's own failed attempts as feedback for the next
-    mutation (the same reasoning as generator's existing `/adapt`); NON_ADAPTIVE
-    is a pure mutation search with no failure-reasoning fed back (closer to
-    GPTFuzzer's mutate-and-test loop).
-    """
-
-    ADAPTIVE = "adaptive"
-    NON_ADAPTIVE = "non_adaptive"
+class ScanType(str, Enum):
+    DEEP_TEAM = "deep_team"
+    MCP = "mcp"
+    AGENT_SKILLS = "agent_skills"
 
 
-class FuzzRunStatus(str, Enum):
+class ScanStatus(str, Enum):
     PENDING = "pending"
     RUNNING = "running"
-    PAUSED = "paused"
-    STOPPED = "stopped"
     COMPLETED = "completed"
+    FAILED = "failed"
 
 
-class FuzzRun(SQLModel, table=True):
-    """A budget-driven fuzzing search over InjectionTemplate variants against
-    one already-configured Campaign (`base_campaign_id` supplies
-    agent_config_id/interactor_llm_model_id/generator_llm_model_id and the
-    one shared honest baseline exchange, see generator/app/backbone.py).
-    Every attempt is a direct LLM call generator makes itself against a
-    mutated copy of the captured baseline -- no Campaign is created per
-    attempt.
+class Scan(SQLModel, table=True):
+    """Security scan configuration for an agent: DeepTeam red teaming,
+    MCP testing, or Agent Skills assessment.
     """
 
     id: Optional[int] = Field(default=None, primary_key=True)
     name: str = Field(index=True)
-    base_campaign_id: int = Field(foreign_key="campaign.id")
-    injection_target: InjectionTarget
-    mode: FuzzMode = FuzzMode.NON_ADAPTIVE
-    seed_template_ids: list[int] = Field(default_factory=list, sa_column=Column(JSON))
-    attack_prompt_ids: list[int] = Field(default_factory=list, sa_column=Column(JSON))
-    judge_llm_model_id: Optional[int] = Field(default=None, foreign_key="llmmodel.id")
-    max_iterations: int = 20
-    stop_on_success: bool = True
-    status: FuzzRunStatus = FuzzRunStatus.PENDING
-    success_attempt_id: Optional[int] = None
+    type: ScanType
+    agent_config_id: int = Field(foreign_key="agentconfig.id", index=True)
+    status: ScanStatus = ScanStatus.PENDING
+    session_id: str = Field(index=True)  # Links scan to proxy session
+    # JSON config specific to scan type:
+    # - DEEP_TEAM: {"vulnerabilities": [...], "attacks": [...], "frameworks": [...]}
+    # - MCP: {} (placeholder)
+    # - AGENT_SKILLS: {} (placeholder)
+    config: str = Field(default="{}", sa_column=Column(JSON))
+    # JSON results: {"vulnerability_results": [...], "overall_score": float, ...}
+    results: Optional[str] = Field(default=None, sa_column=Column(JSON))
     created_at: datetime = Field(default_factory=utcnow)
-    updated_at: datetime = Field(default_factory=utcnow)
-
-
-class FuzzAttempt(SQLModel, table=True):
-    """One iteration of a FuzzRun's search: which seed (bandit arm) was
-    picked, the mutated template actually delivered (as a direct LLM call
-    against the captured baseline, see generator/app/fuzz_engine.py), and
-    the combined detector+judge verdict.
-    """
-
-    id: Optional[int] = Field(default=None, primary_key=True)
-    fuzz_run_id: int = Field(foreign_key="fuzzrun.id", index=True)
-    iteration: int
-    seed_template_id: int = Field(foreign_key="injectiontemplate.id")
-    template_id: int = Field(foreign_key="injectiontemplate.id")
-    mutation_strategy: str = ""
-    detector_success: bool = False
-    judge_score: float = 0.0
-    judge_verdict: str = ""
-    reward: float = 0.0
-    success: bool = False
-    created_at: datetime = Field(default_factory=utcnow)
-
-
-class TreeRun(SQLModel, table=True):
-    """A budget-driven per-tool-call A/B fuzzing run: walks one real, clean
-    conversation (the backbone, via `base_campaign_id`, shared with any
-    `FuzzRun` on the same campaign -- see generator/app/backbone.py)
-    forward, then fuzzes each tool-result checkpoint the backbone actually
-    produced by mutating the captured message array at that point and
-    calling the tested agent's own LLM directly -- see
-    docs/architecture.md's "Injection tree" section.
-
-    Deliberately scoped down for now to a single external exchange for the
-    backbone (no human-in-the-loop multi-turn continuation) -- see
-    docs/architecture.md. Reversible: `ConversationNode`/`InjectionProbe` are
-    already turn-indexed, so multi-turn support can come back later without
-    a schema change here.
-    """
-
-    id: Optional[int] = Field(default=None, primary_key=True)
-    name: str = Field(index=True)
-    base_campaign_id: int = Field(foreign_key="campaign.id")
-    seed_template_ids: list[int] = Field(default_factory=list, sa_column=Column(JSON))
-    attack_prompt_ids: list[int] = Field(default_factory=list, sa_column=Column(JSON))
-    judge_llm_model_id: Optional[int] = Field(default=None, foreign_key="llmmodel.id")
-    max_checkpoints: Optional[int] = None
-    attempts_per_checkpoint: int = 5
-    mode: FuzzMode = FuzzMode.NON_ADAPTIVE
-    status: FuzzRunStatus = FuzzRunStatus.PENDING
-    created_at: datetime = Field(default_factory=utcnow)
-    updated_at: datetime = Field(default_factory=utcnow)
-
-
-class ConversationNode(SQLModel, table=True):
-    """One external turn of a TreeRun's clean backbone -- just enough to
-    replay the same external message sequence for a probe attempt.
-    """
-
-    id: Optional[int] = Field(default=None, primary_key=True)
-    tree_run_id: int = Field(foreign_key="treerun.id", index=True)
-    turn_index: int
-    message_sent: str
-    agent_reply: str
-    created_at: datetime = Field(default_factory=utcnow)
-
-
-class InjectionProbe(SQLModel, table=True):
-    """One fuzzing attempt at one backbone checkpoint (a tool-result
-    occurrence): the checkpoint's captured message array with that tool
-    result mutated, sent as a single direct LLM call. A TreeRun with
-    attempts_per_checkpoint=5 produces up to 5 of these per checkpoint.
-
-    `trajectory` holds the single request/response pair of that direct call
-    (`[{"request": <mutated body>, "response": <raw completion>}]`) -- kept
-    as a list for shape continuity with its earlier multi-turn meaning, but
-    always length 1 now (each probe is one direct call, not a re-driven
-    multi-turn conversation).
-    """
-
-    id: Optional[int] = Field(default=None, primary_key=True)
-    tree_run_id: int = Field(foreign_key="treerun.id", index=True)
-    checkpoint_occurrence: int
-    attempt_index: int
-    seed_template_id: int = Field(foreign_key="injectiontemplate.id")
-    template_id: int = Field(foreign_key="injectiontemplate.id")
-    tool_name: str = ""
-    original_tool_result: str = ""
-    injected_tool_result: str = ""
-    trajectory: list[dict] = Field(default_factory=list, sa_column=Column(JSON))
-    stopped_reason: str = ""
-    detector_success: bool = False
-    judge_score: float = 0.0
-    judge_verdict: str = ""
-    reward: float = 0.0
-    success: bool = False
-    diverged_from_backbone: bool = False
-    divergence_detail: str = ""
-    created_at: datetime = Field(default_factory=utcnow)
+    started_at: Optional[datetime] = None
+    finished_at: Optional[datetime] = None
