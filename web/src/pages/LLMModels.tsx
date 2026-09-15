@@ -67,7 +67,7 @@ export function LLMModels() {
     <div>
       <PageHeader
         title="LLM-модели"
-        description="Подключения к LLM-провайдерам — любым, совместимым с OpenAI API."
+        description="Провайдеры и модели для оценки ответов агента и генерации атак. Подойдёт любой OpenAI-совместимый API."
         actions={
           <button className="btn" onClick={() => (showForm ? handleCancel() : setShowForm(true))}>
             {showForm ? "Отмена" : "Добавить модель"}
@@ -105,7 +105,7 @@ export function LLMModels() {
             </div>
           </div>
           <div className="field">
-            <label>API-ключ{editingId ? " (оставьте пустым, чтобы не менять)" : ""}</label>
+            <label>API-ключ{editingId ? " · оставьте пустым, чтобы не менять" : ""}</label>
             <input
               type="password"
               value={form.api_key}
@@ -147,7 +147,9 @@ export function LLMModels() {
             ))}
             {llmModels.length === 0 && (
               <tr>
-                <td colSpan={6} style={{ color: "var(--text-600)" }}>Нет подключений.</td>
+                <td colSpan={6} style={{ color: "var(--text-500)", padding: "2.4rem", textAlign: "center" }}>
+                  Пока нет моделей. Добавьте подключение к провайдеру.
+                </td>
               </tr>
             )}
           </tbody>

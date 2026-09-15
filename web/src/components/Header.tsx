@@ -1,14 +1,11 @@
 import { useLocation } from "react-router-dom";
 
 const SECTION_LABELS: [string, string, boolean][] = [
-  ["/campaigns", "Сканирования", false],
-  ["/attack-prompts", "Атаки", false],
+  ["/scans", "Сканирования", false],
   ["/llm-models", "LLM-модели", false],
   ["/agent-configs", "Конфигурации агентов", false],
-  ["/fuzz-runs", "Прямой фаззинг", false],
-  ["/tree-runs", "Индирект-фаззинг", false],
+  ["/library", "Библиотека знаний", false],
   ["/events", "События", false],
-  ["/findings", "Уязвимости", false],
   ["/", "Главная", true],
 ];
 

@@ -10,14 +10,17 @@ export interface TrafficEvent {
   provider: string;
   host: string;
   path: string;
-  injected: boolean;
-  injection_target: string | null;
-  success_detected: boolean;
-  detail: string;
-  raw_excerpt: string;
   upstream_base_url: string | null;
-  request_authorization: string | null;
   created_at: string;
+}
+
+export interface TrafficEventDetail extends TrafficEvent {
+  raw_excerpt: string;
+}
+
+export interface TrafficEventDetailResponse {
+  event: TrafficEventDetail;
+  pair: TrafficEventDetail | null;
 }
 
 export interface LLMModel {
@@ -75,9 +78,40 @@ export interface Scan {
   session_id: string;
   config: string; // JSON string
   results: string | null; // JSON string
+  phase: string | null;
+  error: string | null;
+  agent_namespace: string | null;
+  agent_pod_name: string | null;
+  build_job_name: string | null;
+  built_image: string | null;
   created_at: string;
   started_at: string | null;
   finished_at: string | null;
+}
+
+export interface LibraryArticle {
+  slug: string;
+  category: string;
+  title: string;
+  summary: string;
+  tags: string[];
+  source: string;
+  date: string;
+}
+
+export interface LibraryArticleDetail extends LibraryArticle {
+  content: string;
+}
+
+export type ScanLogLevel = "info" | "success" | "error";
+
+export interface ScanLog {
+  id: number;
+  scan_id: number;
+  level: ScanLogLevel;
+  phase: string | null;
+  message: string;
+  created_at: string;
 }
 
 export interface ScanConfig {
@@ -91,6 +125,7 @@ export interface ScanResults {
   vulnerability_results?: Array<{
     vulnerability: string;
     passed: boolean;
+    errored?: boolean;
     score: number;
     reasoning: string;
   }>;

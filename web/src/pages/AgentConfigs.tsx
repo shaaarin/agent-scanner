@@ -18,7 +18,7 @@ const emptyEnv: EnvRow[] = [{ key: "", value: "" }];
 const DEFAULT_REQUEST_BODY_TEMPLATE = '{\n  "message": "{{message}}"\n}';
 
 const interactionModeLabel: Record<string, string> = {
-  none: "Нет",
+  none: "Без диалога",
   api: "REST API",
   langgraph: "LangGraph",
 };
@@ -273,7 +273,7 @@ export function AgentConfigs() {
           response_field: responseField,
         };
       } catch {
-        setError("Шаблон тела запроса должен быть валидным JSON");
+        setError("Проверьте шаблон тела запроса: нужен корректный JSON.");
         return;
       }
     }
@@ -336,14 +336,17 @@ export function AgentConfigs() {
         </div>
 
         <div className="field">
-          <label>Порт API (опционально)</label>
+          <label>Порт API · необязательно</label>
           <input value={apiPort} onChange={(e) => setApiPort(e.target.value)} placeholder="8123" />
+          <p style={{ fontSize: 12, color: "var(--text-500)", margin: "0.4rem 0 0" }}>
+            Если указать порт, платформа сама пробросит адрес агента после запуска.
+          </p>
         </div>
 
         <div className="field">
           <label>Режим взаимодействия</label>
           <select value={interactionMode} onChange={(e) => setInteractionMode(e.target.value as InteractionMode)}>
-            <option value="none">Нет (однократный запрос)</option>
+            <option value="none">Без диалога (только LLM-трафик)</option>
             <option value="api">REST API</option>
             <option value="langgraph">LangGraph</option>
           </select>
@@ -353,7 +356,7 @@ export function AgentConfigs() {
           <>
             <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: "1.6rem" }}>
               <div className="field">
-                <label>URL эндпоинта</label>
+                <label>URL эндпоинта агента</label>
                 <input value={apiUrl} onChange={(e) => setApiUrl(e.target.value)} placeholder="/chat" />
               </div>
               <div className="field">
@@ -365,7 +368,7 @@ export function AgentConfigs() {
               </div>
             </div>
             <div className="field">
-              <label>Шаблон тела запроса (JSON; {"{{message}}"} — место для сообщения)</label>
+              <label>Шаблон тела запроса · {"{{message}}"} подставится в сообщение</label>
               <textarea rows={3} style={{ fontFamily: "monospace" }} value={requestBodyTemplate} onChange={(e) => setRequestBodyTemplate(e.target.value)} />
             </div>
             <div className="field">
@@ -377,10 +380,10 @@ export function AgentConfigs() {
 
         {interactionMode === "langgraph" && (
           <>
-            <p style={{ fontSize: 12, color: "var(--text-600)", margin: "0 0 0.6rem" }}>
-              Базовый URL обычно не нужно указывать вручную: если указан «Порт API» выше,
-              платформа определит его сама после запуска агента. Заполняйте поле только если
-              порт API не указан, а адрес выставляется вручную (например, через <code>kubectl expose</code>).
+            <p style={{ fontSize: 12, color: "var(--text-500)", margin: "0 0 1.2rem" }}>
+              Базовый URL обычно указывать не нужно: если заполнен «Порт API», платформа
+              определит адрес сама после запуска агента. Укажите его вручную только если
+              порт не задан (например, адрес проброшен через <code>kubectl expose</code>).
             </p>
             <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr", gap: "1.6rem" }}>
               <div className="field">
@@ -406,7 +409,7 @@ export function AgentConfigs() {
     <div>
       <PageHeader
         title="Конфигурации агентов"
-        description="Исходный код, назначение и параметры запуска и взаимодействия тестируемого агента. Учётные данные его LLM-провайдера подхватываются из перехваченного трафика и используются при фаззинге."
+        description="Репозиторий, параметры запуска и способ общения с тестируемым агентом. Учётные данные его LLM-провайдера платформа перехватывает сама — отдельно указывать их не нужно."
         actions={
           <button className="btn" onClick={() => (showForm ? handleCancel() : setShowForm(true))}>
             {showForm ? "Отмена" : "Новая конфигурация"}
@@ -423,7 +426,7 @@ export function AgentConfigs() {
       {showForm && editingId && (
         <form className="card" onSubmit={handleSubmit} style={{ marginBottom: "2.4rem" }}>
           <div className="field">
-            <label>Название</label>
+            <label>Название конфигурации</label>
             <input value={name} onChange={(e) => setName(e.target.value)} required />
           </div>
           <div className="field">
@@ -437,7 +440,7 @@ export function AgentConfigs() {
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr", gap: "1.6rem" }}>
             <div className="field">
-              <label>URL репозитория</label>
+              <label>Репозиторий (git URL)</label>
               <input value={gitRepoUrl} onChange={(e) => setGitRepoUrl(e.target.value)} required />
             </div>
             <div className="field">
@@ -450,7 +453,7 @@ export function AgentConfigs() {
             </div>
           </div>
           <div className="field">
-            <label>Токен доступа (опционально — для приватных репозиториев по HTTPS)</label>
+            <label>Токен доступа · только для приватных репозиториев по HTTPS</label>
             <input
               type="password"
               value={gitAccessToken}
@@ -459,7 +462,7 @@ export function AgentConfigs() {
             />
           </div>
           <div className="field">
-            <label>Путь к .env.example (опционально)</label>
+            <label>Файл .env.example · необязательно</label>
             <input value={envExamplePath} onChange={(e) => setEnvExamplePath(e.target.value)} placeholder=".env.example" />
           </div>
 
@@ -471,9 +474,12 @@ export function AgentConfigs() {
 
       {showForm && !editingId && wizardStep === "repo" && (
         <div className="card" style={{ marginBottom: "2.4rem" }}>
-          <h2 style={{ marginTop: 0 }}>1. Загрузить репозиторий</h2>
+          <h2 style={{ marginTop: 0 }}>Шаг 1. Репозиторий</h2>
+          <p style={{ fontSize: 13, color: "var(--text-500)", margin: "0 0 1.6rem" }}>
+            Укажите репозиторий агента — дальше платформа сама найдёт ветки, Dockerfile и пример переменных окружения.
+          </p>
           <div className="field">
-            <label>Название</label>
+            <label>Название конфигурации</label>
             <input value={name} onChange={(e) => setName(e.target.value)} required />
           </div>
           <div className="field">
@@ -486,7 +492,7 @@ export function AgentConfigs() {
             />
           </div>
           <div className="field">
-            <label>URL репозитория</label>
+            <label>Репозиторий (git URL)</label>
             <input
               value={gitRepoUrl}
               onChange={(e) => setGitRepoUrl(e.target.value)}
@@ -495,7 +501,7 @@ export function AgentConfigs() {
             />
           </div>
           <div className="field">
-            <label>Токен доступа (опционально — для приватных репозиториев по HTTPS)</label>
+            <label>Токен доступа · только для приватных репозиториев по HTTPS</label>
             <input
               type="password"
               value={gitAccessToken}
@@ -512,8 +518,8 @@ export function AgentConfigs() {
             {loadingRepo ? "Загрузка…" : "Загрузить репозиторий"}
           </button>
           {!name && (
-            <p style={{ fontSize: 12, color: "var(--text-600)", margin: "0.6rem 0 0" }}>
-              Название понадобится перед сохранением на шаге 2 — не обязательно заполнять его сейчас.
+            <p style={{ fontSize: 12, color: "var(--text-500)", margin: "0.6rem 0 0" }}>
+              Название можно задать позже, на шаге 2.
             </p>
           )}
         </div>
@@ -522,9 +528,9 @@ export function AgentConfigs() {
       {showForm && !editingId && wizardStep === "configure" && (
         <form className="card" onSubmit={handleSubmit} style={{ marginBottom: "2.4rem" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <h2 style={{ marginTop: 0 }}>2. Настроить</h2>
+            <h2 style={{ marginTop: 0 }}>Шаг 2. Настройка</h2>
             <button type="button" className="btn btn-secondary" onClick={() => setWizardStep("repo")}>
-              ← Назад к репозиторию
+              ← К репозиторию
             </button>
           </div>
 
@@ -550,7 +556,7 @@ export function AgentConfigs() {
               )}
               {!inspecting && dockerfiles.length === 0 && (
                 <p style={{ fontSize: 12, color: "var(--text-600)", margin: "0.4rem 0 0" }}>
-                  Dockerfile не найден автоматически — укажите путь вручную.
+                  Dockerfile не найден — укажите путь вручную.
                 </p>
               )}
             </div>
@@ -602,7 +608,11 @@ export function AgentConfigs() {
               </tr>
             ))}
             {configs.length === 0 && (
-              <tr><td colSpan={6} style={{ color: "var(--text-600)" }}>Нет конфигураций.</td></tr>
+              <tr>
+                <td colSpan={6} style={{ color: "var(--text-500)", padding: "2.4rem", textAlign: "center" }}>
+                  Пока нет конфигураций. Добавьте агента, чтобы начать.
+                </td>
+              </tr>
             )}
           </tbody>
         </table>

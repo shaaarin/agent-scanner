@@ -7,6 +7,7 @@ import { AgentConfigs } from "./pages/AgentConfigs";
 import { Events } from "./pages/Events";
 import { Scans } from "./pages/Scans";
 import { ScansDetail } from "./pages/ScansDetail";
+import { Library } from "./pages/Library";
 
 export default function App() {
   return (
@@ -35,6 +36,7 @@ export default function App() {
             <Route path="/scans/:id" element={<ScansDetail />} />
             <Route path="/llm-models" element={<LLMModels />} />
             <Route path="/agent-configs" element={<AgentConfigs />} />
+            <Route path="/library" element={<Library />} />
             <Route path="/events" element={<Events />} />
           </Routes>
         </div>

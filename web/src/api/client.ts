@@ -31,5 +31,3 @@ function makeClient(baseUrl: string) {
 
 export const api = makeClient(import.meta.env.VITE_CONTROL_API_URL ?? "http://localhost:8000");
 export const launcherApi = makeClient(import.meta.env.VITE_LAUNCHER_URL ?? "http://localhost:8400");
-export const interactorApi = makeClient(import.meta.env.VITE_INTERACTOR_URL ?? "http://localhost:8500");
-export const generatorApi = makeClient(import.meta.env.VITE_GENERATOR_URL ?? "http://localhost:8300");

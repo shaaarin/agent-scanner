@@ -23,7 +23,7 @@ def health():
 
 
 class LaunchRequest(BaseModel):
-    campaign_id: int
+    scan_id: int
 
 
 class RepoBranchesRequest(BaseModel):
@@ -89,12 +89,12 @@ def launch(req: LaunchRequest):
     resulting reachable address into the AgentConfig's interaction config.
     Blocks for the duration of the build -- see app/build.py's docstring.
     """
-    campaign = control_client.get_campaign(req.campaign_id)
-    if not campaign.get("agent_config_id"):
-        raise HTTPException(status_code=400, detail="campaign has no agent_config_id set")
-    agent_config = control_client.get_agent_config(campaign["agent_config_id"])
+    scan = control_client.get_scan(req.scan_id)
+    if not scan.get("agent_config_id"):
+        raise HTTPException(status_code=400, detail="scan has no agent_config_id set")
+    agent_config = control_client.get_agent_config(scan["agent_config_id"])
 
-    namespace = namespace_for_session(campaign["session_id"])
+    namespace = namespace_for_session(scan["session_id"])
     namespace_manager.ensure_namespace(namespace)
     ca_manager.ensure_ca_secret_in_namespace(namespace)
 
@@ -114,7 +114,7 @@ def launch(req: LaunchRequest):
     except build.BuildError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
-    pod_name = pod_manager.launch_pod(namespace, agent_config, campaign["session_id"], image)
+    pod_name = pod_manager.launch_pod(namespace, agent_config, scan["session_id"], image)
     node_port = pod_manager.ensure_agent_service(namespace, agent_config)
 
     if node_port:
@@ -122,8 +122,8 @@ def launch(req: LaunchRequest):
         if node:
             _patch_reachable_url(agent_config, f"http://{node}:{node_port}")
 
-    control_client.update_campaign(
-        req.campaign_id,
+    control_client.update_scan(
+        req.scan_id,
         {
             "agent_namespace": namespace,
             "agent_pod_name": pod_name,
@@ -141,28 +141,28 @@ def launch(req: LaunchRequest):
     }
 
 
-@app.post("/stop/{campaign_id}")
-def stop(campaign_id: int):
-    campaign = control_client.get_campaign(campaign_id)
-    if not campaign.get("agent_namespace"):
-        raise HTTPException(status_code=400, detail="no launched agent for this campaign")
+@app.post("/stop/{scan_id}")
+def stop(scan_id: int):
+    scan = control_client.get_scan(scan_id)
+    if not scan.get("agent_namespace"):
+        raise HTTPException(status_code=400, detail="no launched agent for this scan")
 
-    namespace_manager.delete_namespace(campaign["agent_namespace"])
-    control_client.update_campaign(
-        campaign_id,
+    namespace_manager.delete_namespace(scan["agent_namespace"])
+    control_client.update_scan(
+        scan_id,
         {"agent_namespace": None, "agent_pod_name": None, "build_job_name": None, "built_image": None},
     )
     return {"stopped": True}
 
 
-@app.get("/status/{campaign_id}")
-def status(campaign_id: int):
-    campaign = control_client.get_campaign(campaign_id)
-    if not campaign.get("agent_pod_name"):
+@app.get("/status/{scan_id}")
+def status(scan_id: int):
+    scan = control_client.get_scan(scan_id)
+    if not scan.get("agent_pod_name"):
         return {"status": "not_launched"}
     return {
-        "status": pod_manager.pod_status(campaign["agent_namespace"], campaign["agent_pod_name"]),
-        "namespace": campaign["agent_namespace"],
-        "pod_name": campaign["agent_pod_name"],
-        "built_image": campaign.get("built_image"),
+        "status": pod_manager.pod_status(scan["agent_namespace"], scan["agent_pod_name"]),
+        "namespace": scan["agent_namespace"],
+        "pod_name": scan["agent_pod_name"],
+        "built_image": scan.get("built_image"),
     }

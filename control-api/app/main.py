@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api import (
     agent_configs,
     events,
+    library,
     llm_models,
     scans,
 )
@@ -23,6 +24,7 @@ app.include_router(events.router)
 app.include_router(llm_models.router)
 app.include_router(agent_configs.router)
 app.include_router(scans.router)
+app.include_router(library.router)
 
 
 @app.on_event("startup")

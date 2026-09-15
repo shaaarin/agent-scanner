@@ -8,7 +8,8 @@ export type IconName =
   | "findings"
   | "fuzz"
   | "tree"
-  | "attacks";
+  | "attacks"
+  | "library";
 
 export function Icon({ name, size = 20 }: { name: IconName; size?: number }) {
   const p = {
@@ -100,6 +101,13 @@ export function Icon({ name, size = 20 }: { name: IconName; size?: number }) {
           <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
           <line x1="9" y1="7" x2="15" y2="7" />
           <line x1="9" y1="11" x2="14" y2="11" />
+        </svg>
+      );
+    case "library":
+      return (
+        <svg {...p}>
+          <path d="M12 7v14" />
+          <path d="M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z" />
         </svg>
       );
   }

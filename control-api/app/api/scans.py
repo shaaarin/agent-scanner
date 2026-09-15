@@ -1,11 +1,27 @@
+import json
+import os
+from datetime import datetime, timezone
 from typing import Optional
-from fastapi import APIRouter, HTTPException, Query
-from sqlmodel import Session, select
 
-from app.db import engine
-from app.models import Scan, ScanStatus, ScanType, AgentConfig
+import httpx
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlmodel import Session, delete, select
+
+from app.db import engine, get_session
+from app.models import AgentConfig, Scan, ScanLog, ScanLogLevel, ScanStatus, ScanType
+from app.schemas import ScanLogCreate, ScanUpdate
 
 router = APIRouter(prefix="/scans", tags=["scans"])
+
+SCANNER_URL = os.environ.get("SCANNER_URL", "http://scanner:8000")
+
+
+def utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _log(session: Session, scan_id: int, message: str, *, level: ScanLogLevel = ScanLogLevel.INFO, phase: Optional[str] = None) -> None:
+    session.add(ScanLog(scan_id=scan_id, level=level, phase=phase, message=message))
 
 
 @router.get("")
@@ -58,11 +74,11 @@ def get_scan_agent_config(scan_id: int) -> dict:
         scan = session.get(Scan, scan_id)
         if not scan:
             raise HTTPException(status_code=404, detail="Scan not found")
-        
+
         agent_config = session.get(AgentConfig, scan.agent_config_id)
         if not agent_config:
             raise HTTPException(status_code=404, detail="Agent config not found")
-        
+
         return {
             "id": agent_config.id,
             "name": agent_config.name,
@@ -97,13 +113,29 @@ def get_scan(scan_id: int) -> Scan:
         return scan
 
 
-@router.delete("/{scan_id}")
-def delete_scan(scan_id: int) -> dict:
-    """Delete a scan."""
+@router.patch("/{scan_id}")
+def update_scan(scan_id: int, payload: ScanUpdate) -> Scan:
+    """Update scan status/progress/launch metadata (used by scanner/launcher)."""
     with Session(engine) as session:
         scan = session.get(Scan, scan_id)
         if not scan:
             raise HTTPException(status_code=404, detail="Scan not found")
+        for key, value in payload.model_dump(exclude_unset=True).items():
+            setattr(scan, key, value)
+        session.add(scan)
+        session.commit()
+        session.refresh(scan)
+        return scan
+
+
+@router.delete("/{scan_id}")
+def delete_scan(scan_id: int) -> dict:
+    """Delete a scan and its progress log."""
+    with Session(engine) as session:
+        scan = session.get(Scan, scan_id)
+        if not scan:
+            raise HTTPException(status_code=404, detail="Scan not found")
+        session.exec(delete(ScanLog).where(ScanLog.scan_id == scan_id))
         session.delete(scan)
         session.commit()
         return {"message": "Scan deleted"}
@@ -111,19 +143,81 @@ def delete_scan(scan_id: int) -> dict:
 
 @router.post("/{scan_id}/start")
 def start_scan(scan_id: int) -> Scan:
-    """Start a scan (changes status to RUNNING)."""
+    """Mark a scan RUNNING and hand it off to the `scanner` service, which
+    launches the tested agent and drives the actual DeepTeam run. The logs it
+    writes are what the scan detail page polls."""
     with Session(engine) as session:
         scan = session.get(Scan, scan_id)
         if not scan:
             raise HTTPException(status_code=404, detail="Scan not found")
         if scan.status != ScanStatus.PENDING:
             raise HTTPException(status_code=400, detail="Scan can only be started from PENDING status")
-        
+
+        # Fresh progress log for this run.
+        session.exec(delete(ScanLog).where(ScanLog.scan_id == scan_id))
         scan.status = ScanStatus.RUNNING
+        scan.phase = "Запуск"
+        scan.error = None
+        scan.results = None
         scan.started_at = utcnow()
+        scan.finished_at = None
+        _log(session, scan_id, "Сканирование поставлено в очередь", phase="Запуск")
+        session.add(scan)
         session.commit()
         session.refresh(scan)
+
+    try:
+        with httpx.Client(timeout=15.0) as client:
+            client.post(f"{SCANNER_URL}/run/{scan_id}")
+    except httpx.HTTPError as exc:
+        with Session(engine) as session:
+            scan = session.get(Scan, scan_id)
+            scan.status = ScanStatus.FAILED
+            scan.phase = "Ошибка"
+            scan.error = f"scanner недоступен: {exc}"
+            scan.finished_at = utcnow()
+            _log(session, scan_id, f"Не удалось запустить scanner: {exc}", level=ScanLogLevel.ERROR, phase="Ошибка")
+            session.add(scan)
+            session.commit()
+            session.refresh(scan)
         return scan
+
+    return scan
+
+
+@router.get("/{scan_id}/logs")
+def list_scan_logs(
+    scan_id: int,
+    after_id: int = Query(default=0),
+    limit: int = Query(default=500, le=2000),
+    session: Session = Depends(get_session),
+) -> list[ScanLog]:
+    """Incremental progress log: pass the last `id` you've seen as `after_id`."""
+    statement = (
+        select(ScanLog)
+        .where(ScanLog.scan_id == scan_id)
+        .where(ScanLog.id > after_id)
+        .order_by(ScanLog.id)
+        .limit(limit)
+    )
+    return session.exec(statement).all()
+
+
+@router.post("/{scan_id}/logs")
+def create_scan_log(
+    scan_id: int,
+    payload: ScanLogCreate,
+    session: Session = Depends(get_session),
+) -> ScanLog:
+    """Append one progress line (called by the scanner)."""
+    scan = session.get(Scan, scan_id)
+    if not scan:
+        raise HTTPException(status_code=404, detail="Scan not found")
+    log = ScanLog(scan_id=scan_id, **payload.model_dump())
+    session.add(log)
+    session.commit()
+    session.refresh(log)
+    return log
 
 
 @router.post("/{scan_id}/complete")
@@ -135,10 +229,12 @@ def complete_scan(scan_id: int, results: str) -> Scan:
             raise HTTPException(status_code=404, detail="Scan not found")
         if scan.status != ScanStatus.RUNNING:
             raise HTTPException(status_code=400, detail="Scan can only be completed from RUNNING status")
-        
+
         scan.status = ScanStatus.COMPLETED
+        scan.phase = "Завершено"
         scan.results = results
         scan.finished_at = utcnow()
+        session.add(scan)
         session.commit()
         session.refresh(scan)
         return scan
@@ -151,15 +247,13 @@ def fail_scan(scan_id: int, error: str) -> Scan:
         scan = session.get(Scan, scan_id)
         if not scan:
             raise HTTPException(status_code=404, detail="Scan not found")
-        
+
         scan.status = ScanStatus.FAILED
-        scan.results = f'{{"error": "{error}"}}'
+        scan.phase = "Ошибка"
+        scan.error = error
+        scan.results = json.dumps({"error": error})
         scan.finished_at = utcnow()
+        session.add(scan)
         session.commit()
         session.refresh(scan)
         return scan
-
-
-def utcnow():
-    from datetime import datetime, timezone
-    return datetime.now(timezone.utc)

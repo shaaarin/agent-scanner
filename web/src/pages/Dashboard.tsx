@@ -4,40 +4,34 @@ import { Icon, type IconName } from "../components/Icon";
 
 const tiles: { to: string; label: string; description: string; icon: IconName }[] = [
   {
-    to: "/campaigns",
+    to: "/scans",
     label: "Сканирования",
-    description: "Настройка и запуск сканирований тестируемого агента.",
+    description: "Запуск динамического тестирования агента и наблюдение за ходом проверки.",
     icon: "scans",
-  },
-  {
-    to: "/attack-prompts",
-    label: "Атаки",
-    description: "Библиотека техник атак: prompt-инъекции, джейлбрейки и другие.",
-    icon: "attacks",
   },
   {
     to: "/llm-models",
     label: "LLM-модели",
-    description: "Подключения к LLM-провайдерам, используемые в сканированиях.",
+    description: "Провайдеры и модели, которые оценивают ответы агента и порождают атаки.",
     icon: "llm",
   },
   {
     to: "/agent-configs",
     label: "Конфигурации агентов",
-    description: "Параметры запуска и взаимодействия с тестируемым агентом.",
+    description: "Откуда брать агента, как его запускать и как с ним общаться.",
     icon: "agent",
+  },
+  {
+    to: "/library",
+    label: "Библиотека знаний",
+    description: "Материалы по безопасности ИИ: агенты, MCP, навыки и модели.",
+    icon: "library",
   },
   {
     to: "/events",
     label: "События",
-    description: "Трафик, перехваченный прокси, в реальном времени.",
+    description: "Запросы и ответы агента, перехваченные прокси, в реальном времени.",
     icon: "events",
-  },
-  {
-    to: "/findings",
-    label: "Уязвимости",
-    description: "Обмены, в которых инъекция прошла успешно.",
-    icon: "findings",
   },
 ];
 
@@ -46,7 +40,7 @@ export function Dashboard() {
     <div>
       <PageHeader
         title="Agent Scanner"
-        description="Платформа для тестирования LLM-агентов на уязвимости к prompt-инъекциям и атакам через вызов инструментов."
+        description="Платформа для проверки LLM-агентов на устойчивость к prompt-инъекциям и злоупотреблению инструментами."
       />
       <div
         style={{

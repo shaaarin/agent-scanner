@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Optional
 
-from sqlalchemy import Column, JSON
+from sqlalchemy import Column, JSON, Text
 from sqlmodel import Field, SQLModel
 
 
@@ -91,7 +91,9 @@ class EventDirection(str, Enum):
 
 
 class TrafficEvent(SQLModel, table=True):
-    """Every intercepted request/response the proxy reports back."""
+    """Every intercepted request/response the proxy reports back. The full
+    body is kept in `raw_excerpt` so the events page can show exactly what the
+    agent sent/received (not just that a call happened)."""
 
     id: Optional[int] = Field(default=None, primary_key=True)
     session_id: str = Field(index=True)
@@ -101,6 +103,10 @@ class TrafficEvent(SQLModel, table=True):
     provider: str = "openai"
     host: str = ""
     path: str = ""
+    # Exact request/response body the proxy forwarded, stored untruncated.
+    raw_excerpt: str = Field(default="", sa_column=Column(Text))
+    # Real upstream the agent dialed (scheme://host[:port]), for context.
+    upstream_base_url: Optional[str] = None
     created_at: datetime = Field(default_factory=utcnow)
 
 
@@ -135,6 +141,38 @@ class Scan(SQLModel, table=True):
     config: str = Field(default="{}", sa_column=Column(JSON))
     # JSON results: {"vulnerability_results": [...], "overall_score": float, ...}
     results: Optional[str] = Field(default=None, sa_column=Column(JSON))
+    # High-level progress state, written by scanner as it moves through phases
+    # ("Инициализация", "Запуск агента", ...). The detailed per-line log lives
+    # in ScanLog -- see /scans/{id}/logs.
+    phase: Optional[str] = None
+    error: Optional[str] = None
+    # Launch metadata, written by launcher once the tested agent's Pod exists
+    # (mirrors what Campaign carried before the Scan refactor).
+    agent_namespace: Optional[str] = None
+    agent_pod_name: Optional[str] = None
+    build_job_name: Optional[str] = None
+    built_image: Optional[str] = None
     created_at: datetime = Field(default_factory=utcnow)
     started_at: Optional[datetime] = None
     finished_at: Optional[datetime] = None
+
+
+class ScanLogLevel(str, Enum):
+    INFO = "info"
+    SUCCESS = "success"
+    ERROR = "error"
+
+
+class ScanLog(SQLModel, table=True):
+    """One line in a scan's live progress log, appended by the scanner (or
+    control-api itself for start/launch failures) and polled by the scan
+    detail page. Ordered by autoincrementing id, so the UI can poll
+    `GET /scans/{id}/logs?after_id=<last seen>` for cheap incremental updates.
+    """
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    scan_id: int = Field(foreign_key="scan.id", index=True)
+    level: ScanLogLevel = ScanLogLevel.INFO
+    phase: Optional[str] = None
+    message: str
+    created_at: datetime = Field(default_factory=utcnow)

@@ -24,12 +24,28 @@ SESSION_ID = os.environ.get("SESSION_ID", "")
 CHAT_COMPLETIONS_SUFFIX = "/chat/completions"
 DEEPTEAM_MODE = os.environ.get("DEEPTEAM_MODE", "false").lower() == "true"
 
+# opencode.ai/zen asks programmatic clients to identify as a real coding
+# agent (custom User-Agent) and to carry a stable per-dialogue session header
+# so it can route/cache prompts. The tested agent's own code stays untouched;
+# the identity is injected here, transparently, on its way out.
+CUSTOM_USER_AGENT = os.environ.get("LLM_CLIENT_USER_AGENT", "my-coding-agent/1.0")
+OPENCODE_HOST = "opencode.ai"
+
 
 DEFAULT_PORTS = {"http": 80, "https": 443}
 
 
 def _is_chat_completions(flow: http.HTTPFlow) -> bool:
     return flow.request.path.split("?")[0].endswith(CHAT_COMPLETIONS_SUFFIX)
+
+
+def _inject_client_identity(flow: http.HTTPFlow) -> None:
+    """Rewrite the tested agent's outbound LLM request headers so the
+    provider sees a well-identified coding-agent client. Only headers are
+    touched -- the body/prompt stays exactly what the agent sent."""
+    flow.request.headers["User-Agent"] = CUSTOM_USER_AGENT
+    if SESSION_ID and OPENCODE_HOST in flow.request.pretty_host:
+        flow.request.headers["x-opencode-session"] = SESSION_ID
 
 
 def _upstream_base_url(flow: http.HTTPFlow) -> str:
@@ -73,6 +89,8 @@ class InjectionAddon:
             body = json.loads(flow.request.content or b"{}")
         except json.JSONDecodeError:
             return
+
+        _inject_client_identity(flow)
 
         scan = await control_client.get_active_scan(SESSION_ID)
         flow.metadata["scan"] = scan

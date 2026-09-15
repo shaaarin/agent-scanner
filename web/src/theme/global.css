@@ -371,3 +371,66 @@ pre code {
   opacity: 0.35;
   margin-bottom: 0.4rem;
 }
+
+/* ── Knowledge library (rendered Markdown) ── */
+.library-markdown {
+  color: var(--text-700);
+  font-size: var(--font-body-size);
+  line-height: 1.7;
+}
+.library-markdown h1 {
+  font-size: 2.4rem;
+  line-height: 1.25;
+  margin: 0 0 1.2rem;
+  color: var(--text-1000);
+}
+.library-markdown h2 {
+  font-size: 1.9rem;
+  line-height: 1.3;
+  margin: 2.4rem 0 1rem;
+  color: var(--text-1000);
+}
+.library-markdown h3 {
+  font-size: 1.6rem;
+  margin: 2rem 0 0.8rem;
+  color: var(--text-1000);
+}
+.library-markdown h1:first-child,
+.library-markdown h2:first-child {
+  margin-top: 0;
+}
+.library-markdown p {
+  color: var(--text-700);
+  margin: 0 0 1.2rem;
+}
+.library-markdown ul,
+.library-markdown ol {
+  margin: 0 0 1.2rem;
+  padding-left: 2.2rem;
+  color: var(--text-700);
+}
+.library-markdown li {
+  margin-bottom: 0.4rem;
+}
+.library-markdown blockquote {
+  margin: 0 0 1.2rem;
+  padding: 0.2rem 0 0.2rem 1.4rem;
+  border-left: 0.3rem solid var(--separator-default);
+  color: var(--text-500);
+}
+.library-markdown hr {
+  border: none;
+  border-top: 0.1rem solid var(--separator-list);
+  margin: 2.4rem 0;
+}
+.library-markdown pre {
+  background: var(--background-generic);
+  border-radius: var(--radius-m);
+  padding: 1.2rem 1.4rem;
+  overflow-x: auto;
+  margin: 0 0 1.2rem;
+}
+.library-markdown img {
+  max-width: 100%;
+  border-radius: var(--radius-m);
+}

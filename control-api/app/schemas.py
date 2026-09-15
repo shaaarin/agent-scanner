@@ -1,10 +1,14 @@
+from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from app.models import (
+    EventDirection,
     InteractionMode,
     ProviderType,
+    ScanLogLevel,
+    ScanStatus,
 )
 
 
@@ -64,3 +68,52 @@ class AgentConfigUpdate(BaseModel):
     interaction_mode: Optional[InteractionMode] = None
     api_config: Optional[dict] = None
     langgraph_config: Optional[dict] = None
+
+
+class ScanUpdate(BaseModel):
+    status: Optional[ScanStatus] = None
+    phase: Optional[str] = None
+    error: Optional[str] = None
+    results: Optional[str] = None
+    started_at: Optional[datetime] = None
+    finished_at: Optional[datetime] = None
+    agent_namespace: Optional[str] = None
+    agent_pod_name: Optional[str] = None
+    build_job_name: Optional[str] = None
+    built_image: Optional[str] = None
+
+
+class ScanLogCreate(BaseModel):
+    level: ScanLogLevel = ScanLogLevel.INFO
+    phase: Optional[str] = None
+    message: str
+
+
+class TrafficEventRead(BaseModel):
+    """Event metadata for the list view -- deliberately without the body so
+    a long events table stays light."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    session_id: str
+    scan_id: Optional[int] = None
+    flow_id: str
+    direction: EventDirection
+    provider: str
+    host: str
+    path: str
+    upstream_base_url: Optional[str] = None
+    created_at: datetime
+
+
+class TrafficEventDetail(TrafficEventRead):
+    raw_excerpt: str = ""
+
+
+class TrafficEventDetailResponse(BaseModel):
+    """One event plus its counterpart in the same flow (the request for a
+    response, or vice versa), so the UI can show a whole exchange at once."""
+
+    event: TrafficEventDetail
+    pair: Optional[TrafficEventDetail] = None

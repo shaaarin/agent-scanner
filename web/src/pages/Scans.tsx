@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import type { Scan, ScanType, AgentConfig, LLMModel } from "../api/types";
 import { PageHeader } from "../components/PageHeader";
@@ -24,6 +25,7 @@ const DEEPTEAM_ATTACKS = [
 ];
 
 export function Scans() {
+  const navigate = useNavigate();
   const [scans, setScans] = useState<Scan[]>([]);
   const [agentConfigs, setAgentConfigs] = useState<AgentConfig[]>([]);
   const [llmModels, setLlmModels] = useState<LLMModel[]>([]);
@@ -42,6 +44,14 @@ export function Scans() {
       api.get<LLMModel[]>("/llm-models").then(setLlmModels),
     ]);
   }, []);
+
+  useEffect(() => {
+    if (!scans.some((scan) => scan.status === "running")) return;
+    const timer = setInterval(() => {
+      api.get<Scan[]>("/scans").then(setScans);
+    }, 2000);
+    return () => clearInterval(timer);
+  }, [scans]);
 
   const handleCreateScan = async () => {
     if (!newScanName || !selectedAgentId || !selectedLlmModelId) return;
@@ -79,7 +89,7 @@ export function Scans() {
   const handleStartScan = async (scanId: number) => {
     try {
       await api.post(`/scans/${scanId}/start`, {});
-      api.get<Scan[]>("/scans").then(setScans);
+      navigate(`/scans/${scanId}`);
     } catch (error) {
       console.error("Failed to start scan:", error);
     }
@@ -101,12 +111,18 @@ export function Scans() {
       completed: "badge-success",
       failed: "badge-danger",
     };
-    return <span className={`badge ${colors[status] || "badge-secondary"}`}>{status}</span>;
+    const labels: Record<string, string> = {
+      pending: "Ожидает запуска",
+      running: "Выполняется",
+      completed: "Завершено",
+      failed: "Ошибка",
+    };
+    return <span className={`badge ${colors[status] || "badge-secondary"}`}>{labels[status] || status}</span>;
   };
 
   const getTypeLabel = (type: ScanType) => {
     const labels: Record<ScanType, string> = {
-      deep_team: "DeepTeam",
+      deep_team: "Динамическое тестирование",
       mcp: "MCP",
       agent_skills: "Agent Skills",
     };
@@ -117,7 +133,7 @@ export function Scans() {
     <div>
       <PageHeader
         title="Сканирования"
-        description="Сканирования безопасности агентов: DeepTeam, MCP, Agent Skills"
+        description="Проверка безопасности агентов: динамическое тестирование, MCP и Agent Skills."
         actions={
           <button
             className="btn btn-primary"
@@ -130,7 +146,14 @@ export function Scans() {
 
       <div className="card">
         {scans.length === 0 ? (
-          <p style={{ color: "var(--text-600)" }}>Сканирований пока нет</p>
+          <div style={{ padding: "3.2rem", textAlign: "center" }}>
+            <p style={{ margin: 0, color: "var(--text-700)", fontWeight: 500 }}>
+              Здесь появятся ваши сканирования
+            </p>
+            <p style={{ margin: "0.6rem 0 0", color: "var(--text-500)", fontSize: 13 }}>
+              Создайте первое сканирование, чтобы проверить агента на устойчивость к атакам.
+            </p>
+          </div>
         ) : (
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
@@ -145,7 +168,14 @@ export function Scans() {
             <tbody>
               {scans.map((scan) => (
                 <tr key={scan.id} style={{ borderBottom: "0.1rem solid var(--separator-default)" }}>
-                  <td style={{ padding: "1rem" }}>{scan.name}</td>
+                  <td style={{ padding: "1rem" }}>
+                    <button
+                      className="btn btn-sm btn-secondary"
+                      onClick={() => navigate(`/scans/${scan.id}`)}
+                    >
+                      {scan.name}
+                    </button>
+                  </td>
                   <td style={{ padding: "1rem" }}>{getTypeLabel(scan.type)}</td>
                   <td style={{ padding: "1rem" }}>{getStatusBadge(scan.status)}</td>
                   <td style={{ padding: "1rem" }}>
@@ -197,15 +227,18 @@ export function Scans() {
             style={{ padding: "2rem", minWidth: "500px", maxWidth: "700px", maxHeight: "90vh", overflow: "auto" }}
             onClick={(e) => e.stopPropagation()}
           >
-            <h2 style={{ marginBottom: "1.5rem" }}>Новое сканирование</h2>
+            <h2 style={{ marginBottom: "0.6rem" }}>Новое сканирование</h2>
+            <p style={{ margin: "0 0 1.5rem", color: "var(--text-500)", fontSize: 13 }}>
+              Платформа запустит агента и проверит его ответы на выбранные классы атак.
+            </p>
             <div style={{ marginBottom: "1rem" }}>
-              <label style={{ display: "block", marginBottom: "0.5rem" }}>Название</label>
+              <label style={{ display: "block", marginBottom: "0.5rem" }}>Название сканирования</label>
               <input
                 type="text"
                 className="input"
                 value={newScanName}
                 onChange={(e) => setNewScanName(e.target.value)}
-                placeholder="Название сканирования"
+                placeholder="Например: проверка агента поддержки"
                 style={{ width: "100%" }}
               />
             </div>
@@ -217,20 +250,20 @@ export function Scans() {
                 onChange={(e) => setNewScanType(e.target.value as ScanType)}
                 style={{ width: "100%" }}
               >
-                <option value="deep_team">DeepTeam</option>
+                <option value="deep_team">Динамическое тестирование</option>
                 <option value="mcp">MCP (в разработке)</option>
                 <option value="agent_skills">Agent Skills (в разработке)</option>
               </select>
             </div>
             <div style={{ marginBottom: "1rem" }}>
-              <label style={{ display: "block", marginBottom: "0.5rem" }}>Агент</label>
+              <label style={{ display: "block", marginBottom: "0.5rem" }}>Тестируемый агент</label>
               <select
                 className="input"
                 value={selectedAgentId || ""}
                 onChange={(e) => setSelectedAgentId(Number(e.target.value))}
                 style={{ width: "100%" }}
               >
-                <option value="">Выберите агент</option>
+                <option value="">Выберите агента</option>
                 {agentConfigs.map((config) => (
                   <option key={config.id} value={config.id}>
                     {config.name}
@@ -239,7 +272,7 @@ export function Scans() {
               </select>
             </div>
             <div style={{ marginBottom: "1rem" }}>
-              <label style={{ display: "block", marginBottom: "0.5rem" }}>LLM модель для оценки (DeepTeam)</label>
+              <label style={{ display: "block", marginBottom: "0.5rem" }}>LLM-модель для оценки</label>
               <select
                 className="input"
                 value={selectedLlmModelId || ""}
@@ -253,13 +286,16 @@ export function Scans() {
                   </option>
                 ))}
               </select>
+              <p style={{ margin: "0.4rem 0 0", fontSize: 12, color: "var(--text-500)" }}>
+                Ею будут генерироваться атаки и оцениваться ответы агента.
+              </p>
             </div>
-            
+
             {newScanType === "deep_team" && (
               <>
                 <div style={{ marginBottom: "1rem" }}>
                   <label style={{ display: "block", marginBottom: "0.5rem" }}>
-                    Уязвимости ({selectedVulnerabilities.length} выбрано)
+                    Уязвимости · выбрано: {selectedVulnerabilities.length}
                   </label>
                   <div style={{ 
                     maxHeight: "150px", 
@@ -290,7 +326,7 @@ export function Scans() {
                 
                 <div style={{ marginBottom: "1.5rem" }}>
                   <label style={{ display: "block", marginBottom: "0.5rem" }}>
-                    Атаки ({selectedAttacks.length} выбрано)
+                    Атаки · выбрано: {selectedAttacks.length}
                   </label>
                   <div style={{ 
                     maxHeight: "150px", 

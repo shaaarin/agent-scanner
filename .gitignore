@@ -6,3 +6,4 @@ dist/
 .kube-kind-config.yaml
 *.db
 .env
+.claude/

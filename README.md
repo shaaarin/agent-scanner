@@ -1,65 +1,81 @@
-# agent-scanner
+# Agent Scanner
 
-A testing platform for web applications that integrate LLMs with Tool Calling,
-focused on prompt-injection attacks against tool-calling logic (unauthorized
-tool invocation, parameter tampering, sandbox escape) and on using tool
-calling as a trigger/proxy for classic web vulnerabilities (XSS, SSRF, RCE,
-IDOR, SQLi) reachable through tool arguments or tool results.
+Платформа для проверки безопасности LLM-агентов с вызовом инструментов
+(tool calling): динамическое тестирование агента атаками (prompt-инъекции,
+джейлбрейки и др.), перехват его реального трафика к LLM и разбор того, что
+именно агент отправлял и получал.
 
-Injection happens directly in LLM traffic — user messages, tool results, and
-assistant responses — at an **LLM Proxy** layer, not by tampering with
-infrastructure below the LLM conversation.
+Тестируемый агент при этом **не меняется**: платформа прозрачно
+перехватывает его исходящий HTTPS на сетевом уровне, поэтому его собственные
+ключи и адрес LLM-провайдера остаются нетронутыми (см. раздел
+[«Как подключается агент»](#как-подключается-агент)).
 
-See [`docs/architecture.md`](docs/architecture.md) for the full design and
-phased roadmap. Implemented so far: the LLM proxy/injection core, an LLM-based
-attack generator, classic-web-vuln signature detection, the web UI, and a
-Kubernetes-based agent launcher + interactor (agents are built from a git
-repo in-cluster and run as Pods; only Anthropic-format support and Skills
-support remain).
+## Что умеет
 
-## How an agent attaches
+- **Сканирования** — динамическое тестирование агента через DeepTeam:
+  платформа собирает агента из git-репозитория, запускает его в Kubernetes,
+  прогоняет выбранные уязвимости и атаки, показывает прогресс по фазам и
+  живой журнал, а затем — результаты по каждому тест-кейсу.
+- **Конфигурации агентов** — откуда брать репозиторий, как его собирать и
+  запускать, как общаться с агентом (REST API или LangGraph).
+- **LLM-модели** — подключения к OpenAI-совместимым провайдерам, которыми
+  оцениваются ответы агента и генерируются атаки.
+- **События** — перехваченный прокси трафик агента к LLM; по каждому событию
+  можно раскрыть тело запроса и ответа.
+- **Библиотека знаний** — локальные Markdown-материалы по безопасности ИИ
+  (агенты, MCP, навыки, модели), которые просто добавляются файлами.
 
-**Zero changes.** A tested agent's own real LLM config — `OPENAI_API_KEY`,
-`OPENAI_BASE_URL`, whatever it already has — is left completely untouched.
-The platform intercepts its outbound HTTPS traffic transparently at the
-network level: each agent Pod gets a CA trust-store overwrite plus an
-iptables redirect into an `mitm-proxy` sidecar that terminates and re-signs
-the connection on the fly (see `docs/architecture.md`'s "MITM pivot"
-section for the full mechanism). The agent never needs to know the platform
-exists.
+## Как подключается агент
 
-## Quickstart
+Ключевой принцип — **ноль изменений в тестируемом агенте**. Его реальная
+конфигурация LLM (`OPENAI_API_KEY`, `OPENAI_BASE_URL` и т.п.) не трогается.
 
-Every LLM call in this platform — the tested agent's own traffic, the
-attack generator, the interactor, and any local example agent — goes
-through a real OpenAI-compatible provider. There are no mock LLM stand-ins.
-Copy `.env.example` to `.env` and fill in `LLM_PROVIDER_BASE_URL` /
-`LLM_PROVIDER_API_KEY` / `LLM_PROVIDER_MODEL` (any OpenAI-compatible
-endpoint works: OpenAI itself, OpenRouter, a self-hosted vLLM/Ollama server,
-etc. — pick something cheap).
+Каждый Pod агента получает:
+
+1. `ca-trust-setup` (initContainer) — подменяет системное хранилище
+   доверенных сертификатов на связку «системные CA + корневой CA платформы»;
+2. `net-setup` (initContainer) — правило iptables, перенаправляющее
+   исходящий HTTPS на сайдкар;
+3. сайдкар `mitm-proxy` — mitmproxy, который терминирует и заново
+   подписывает соединение «на лету» (`proxy/addon.py`).
+
+Дополнительно прокси помечает исходящие запросы клиента как агент
+программирования (свой `User-Agent` и заголовок сессии `x-opencode-session`
+для `opencode.ai`) — тоже без правок кода агента.
+
+## Быстрый старт
+
+Все LLM-вызовы в платформе идут в реальный провайдер — моков нет. Скопируйте
+`.env.example` в `.env` и заполните провайдера:
 
 ```
-cp .env.example .env   # then edit it
-docker compose up --build
+cp .env.example .env
+docker compose up -d --build
 ```
 
-This brings up the full platform: `control-api` (campaign/template/LLM-model
-store), `proxy` (the MITM interception point, with classic-web-vuln
-signature detection on tool arguments), `web` (the dashboard UI, at
-`http://localhost:4173`), `generator` (the LLM-based attack generator), and
-two real example agents (`stub-agent`, a minimal tool-calling script;
-`customer-support-agent`, a real LangGraph-framework agent — see below) that
-exercise the whole platform against your configured provider.
+Поднимаются: `control-api` (хранилище и API, `:8000`), `proxy` (перехват,
+`:8100`), `web` (интерфейс, `http://localhost:4173`) и `scanner` (движок
+тестирования). `launcher` запускает тестируемых агентов в кластере
+Kubernetes.
 
-`launcher` and `interactor` additionally need a **Kubernetes cluster**
-reachable via a kubeconfig — tested agents are built from a git repo
-in-cluster (git-clone + Kaniko) and launched as Pods, not plain Docker
-containers, so the MITM interception above has a real Pod network namespace
-to work in. See [`docs/running-locally.md`](docs/running-locally.md) for the
-one-time local `kind`-cluster setup this requires, and full walkthroughs of
-every piece — including a complete real-world case study: a real LangGraph
-customer-support agent (`examples/langgraph-customer-support`) with tools
-that move real (simulated) money, launched in-cluster, driven by the
-`interactor` LLM as an ordinary customer, and hijacked via an injected
-prompt into issuing an unauthorized refund — all through the transparent
-MITM path, with the agent never told the platform exists.
+Для сканирований дополнительно нужен кластер Kubernetes (локально — `kind`)
+и одна разовая настройка. Полный порядок действий — в
+[`docs/running-locally.md`](docs/running-locally.md).
+
+## Сервисы
+
+| Сервис | Роль |
+|---|---|
+| `control-api` | FastAPI + SQLModel/SQLite. Единый источник данных: `LLMModel`, `AgentConfig`, `Scan`, `ScanLog`, `TrafficEvent`. Миграции — Alembic. |
+| `proxy` | mitmproxy-аддон: перехват и журналирование трафика агента к LLM, подстановка заголовков идентификации. |
+| `scanner` | Исполняет сканирование: поднимает агента через `launcher`, гоняет DeepTeam, пишет прогресс и результаты. |
+| `launcher` | Собирает образ агента в кластере (git-clone + Kaniko) и запускает Pod с MITM-сайдкаром. |
+| `web` | Дашборд (React/Vite). **Весь текст интерфейса — на русском.** |
+| `control-api-mitm-bridge`, `launcher-mitm-bridge` | `alpine/socat`-форвардеры для надёжного опубликованного порта на этом dev-окружении (см. `CLAUDE.md`). |
+
+## Документация
+
+- [`docs/architecture.md`](docs/architecture.md) — как всё устроено.
+- [`docs/running-locally.md`](docs/running-locally.md) — локальный запуск,
+  настройка кластера и сквозной сценарий сканирования.
+- [`AGENTS.md`](AGENTS.md) — карта репозитория и соглашения для разработки.

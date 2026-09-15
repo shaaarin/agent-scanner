@@ -1,32 +1,52 @@
-# React + TypeScript + Vite
+# web — дашборд Agent Scanner
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+React + TypeScript + Vite. **Весь текст интерфейса — на русском.** Новый
+текст добавляйте на русском и в том же тоне (см. `AGENTS.md`).
 
-Currently, two official plugins are available:
+## Запуск
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+Обычно поднимается вместе со всем стеком:
 
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the Oxlint configuration
-
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
-
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
+```
+docker compose up -d --build web
 ```
 
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+Интерфейс: http://localhost:4173 (сборка отдаётся статикой через `serve`).
+
+Для разработки с HMR (нужен Node.js):
+
+```
+npm install
+npm run dev
+```
+
+## Адреса API
+
+Задаются на этапе сборки (build args `docker-compose.yml`):
+
+| Переменная | По умолчанию | Назначение |
+|---|---|---|
+| `VITE_CONTROL_API_URL` | `http://localhost:8000` | control-api (основные данные и API) |
+| `VITE_LAUNCHER_URL` | `http://localhost:8400` | launcher (разбор репозитория в мастере конфигурации агента) |
+
+Браузер обращается к ним напрямую; CORS на `control-api` открыт.
+
+## Страницы
+
+| Маршрут | Файл | Назначение |
+|---|---|---|
+| `/` | `pages/Dashboard.tsx` | плитки-переходы |
+| `/scans`, `/scans/:id` | `pages/Scans.tsx`, `pages/ScansDetail.tsx` | создание сканирований и наблюдение за прогрессом |
+| `/agent-configs` | `pages/AgentConfigs.tsx` | репозиторий, запуск и режим взаимодействия агента |
+| `/llm-models` | `pages/LLMModels.tsx` | подключения к OpenAI-совместимым провайдерам |
+| `/library` | `pages/Library.tsx` | библиотека знаний (локальные Markdown-материалы) |
+| `/events` | `pages/Events.tsx` | перехваченный трафик; раскрытие тел запроса/ответа |
+
+## Сборка и проверки
+
+```
+npm run build   # tsc -b && vite build
+npm run lint    # oxlint
+```
+
+Автотестов нет — проверяйте живой сценарий через поднятый стек.

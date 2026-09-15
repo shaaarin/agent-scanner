@@ -1,0 +1,5 @@
+fastapi
+uvicorn[standard]
+httpx
+deepteam==1.0.9
+sentry-sdk
