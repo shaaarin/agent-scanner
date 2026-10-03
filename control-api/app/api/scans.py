@@ -13,7 +13,19 @@ from app.schemas import ScanLogCreate, ScanUpdate
 
 router = APIRouter(prefix="/scans", tags=["scans"])
 
-SCANNER_URL = os.environ.get("SCANNER_URL", "http://scanner:8000")
+# Каждый тип скана выполняет свой сервис-сканер с одинаковым контрактом
+# (`POST /run/{scan_id}`, прогресс и результаты -- обратно в control-api).
+# Тип без сканера (mcp, agent_skills) запустить нельзя.
+SCANNERS: dict[ScanType, tuple[str, str]] = {
+    ScanType.DEEP_TEAM: (
+        "scanner-deepteam",
+        os.environ.get("SCANNER_DEEPTEAM_URL", "http://scanner-deepteam:8000"),
+    ),
+    ScanType.CODE_SCAN: (
+        "scanner-promptfoo",
+        os.environ.get("SCANNER_PROMPTFOO_URL", "http://scanner-promptfoo:8000"),
+    ),
+}
 
 
 def utcnow() -> datetime:
@@ -143,15 +155,18 @@ def delete_scan(scan_id: int) -> dict:
 
 @router.post("/{scan_id}/start")
 def start_scan(scan_id: int) -> Scan:
-    """Mark a scan RUNNING and hand it off to the `scanner` service, which
-    launches the tested agent and drives the actual DeepTeam run. The logs it
-    writes are what the scan detail page polls."""
+    """Mark a scan RUNNING and hand it off to the scanner service for its type
+    (see SCANNERS). The scanner works in the background; the logs it writes
+    are what the scan detail page polls."""
     with Session(engine) as session:
         scan = session.get(Scan, scan_id)
         if not scan:
             raise HTTPException(status_code=404, detail="Scan not found")
         if scan.status != ScanStatus.PENDING:
             raise HTTPException(status_code=400, detail="Scan can only be started from PENDING status")
+        if scan.type not in SCANNERS:
+            raise HTTPException(status_code=400, detail=f"Для типа сканирования {scan.type.value} сканер пока не подключён")
+        scanner_name, scanner_url = SCANNERS[scan.type]
 
         # Fresh progress log for this run.
         session.exec(delete(ScanLog).where(ScanLog.scan_id == scan_id))
@@ -168,15 +183,15 @@ def start_scan(scan_id: int) -> Scan:
 
     try:
         with httpx.Client(timeout=15.0) as client:
-            client.post(f"{SCANNER_URL}/run/{scan_id}")
+            client.post(f"{scanner_url}/run/{scan_id}").raise_for_status()
     except httpx.HTTPError as exc:
         with Session(engine) as session:
             scan = session.get(Scan, scan_id)
             scan.status = ScanStatus.FAILED
             scan.phase = "Ошибка"
-            scan.error = f"scanner недоступен: {exc}"
+            scan.error = f"{scanner_name} недоступен: {exc}"
             scan.finished_at = utcnow()
-            _log(session, scan_id, f"Не удалось запустить scanner: {exc}", level=ScanLogLevel.ERROR, phase="Ошибка")
+            _log(session, scan_id, f"Не удалось запустить {scanner_name}: {exc}", level=ScanLogLevel.ERROR, phase="Ошибка")
             session.add(scan)
             session.commit()
             session.refresh(scan)

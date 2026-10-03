@@ -76,7 +76,16 @@ def _send_via_langgraph(langgraph_config: dict, message: str) -> str:
                 },
             )
             resp.raise_for_status()
-            messages = resp.json().get("messages") or []
+            data = resp.json()
+            # LangGraph отдаёт падение графа (например, RateLimitError от LLM
+            # агента) как HTTP 200 с телом {"__error__": {...}}. Это ошибка
+            # кейса, а не пустой ответ агента, иначе судья оценит её как
+            # «устойчив».
+            if isinstance(data, dict) and data.get("__error__"):
+                err = data["__error__"]
+                detail = f"{err.get('error')}: {err.get('message')}" if isinstance(err, dict) else str(err)
+                raise RuntimeError(f"агент вернул ошибку: {detail}")
+            messages = (data.get("messages") if isinstance(data, dict) else None) or []
             for msg in reversed(messages):
                 # LangGraph emits its own message schema: `type` is
                 # "human"/"ai"/"tool" and `role` is often absent.

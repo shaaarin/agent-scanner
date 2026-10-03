@@ -15,7 +15,9 @@ services:
       CONTROL_API_DB_PATH: /data/control-api.db
       DEMO_SESSION_ID: demo-session-1
       SEED_DEMO_DATA: "true"
-      SCANNER_URL: http://scanner:8000
+      # Сканер выбирается по типу скана, см. control-api/app/api/scans.py.
+      SCANNER_DEEPTEAM_URL: http://scanner-deepteam:8000
+      SCANNER_PROMPTFOO_URL: http://scanner-promptfoo:8000
       LIBRARY_DIR: /library
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
@@ -58,8 +60,12 @@ services:
     depends_on:
       - control-api
 
-  scanner:
-    build: ./scanner
+  # Сканеры: каждый тип скана -- отдельный сервис из scanner/<имя>
+  # с одинаковым контрактом (POST /run/{scan_id}).
+
+  # Динамическое тестирование (DeepTeam): поднимает агента через launcher.
+  scanner-deepteam:
+    build: ./scanner/deepteam
     environment:
       CONTROL_API_URL: http://control-api:8000
       LAUNCHER_URL: http://launcher:8000
@@ -68,6 +74,22 @@ services:
       # Needed to reach the tested agent's NodePort via the kind node's
       # container name, the same reason launcher is dual-homed.
       - kind
+    depends_on:
+      control-api:
+        condition: service_healthy
+
+  # Анализ кода (promptfoo code-scans): только клонирует репозиторий агента,
+  # kind и launcher не нужны. Анализ выполняет облако Promptfoo.
+  scanner-promptfoo:
+    build: ./scanner/promptfoo
+    environment:
+      CONTROL_API_URL: http://control-api:8000
+      PROMPTFOO_API_KEY: ${PROMPTFOO_API_KEY:-}
+      # Свой сервер Promptfoo (Enterprise On-Prem); пусто -- облако Promptfoo.
+      PROMPTFOO_CODE_SCAN_API_HOST: ${PROMPTFOO_CODE_SCAN_API_HOST:-}
+      PROMPTFOO_DISABLE_TELEMETRY: "1"
+      PROMPTFOO_DISABLE_UPDATE: "1"
+      SCAN_CODE_TIMEOUT: "1800"
     depends_on:
       control-api:
         condition: service_healthy

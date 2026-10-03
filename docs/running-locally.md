@@ -8,6 +8,8 @@
 - Реальный OpenAI-совместимый LLM-провайдер. Моков в платформе нет: и
   перехватываемый агент, и модель-судья DeepTeam ходят в настоящий
   провайдер. Результаты недетерминированы — это честный результат теста.
+- Для анализа кода — ключ Promptfoo (`PROMPTFOO_API_KEY`). Кластер для
+  анализа кода не нужен.
 
 ## 1. Переменные окружения
 
@@ -19,6 +21,12 @@ cp .env.example .env
 `LLM_PROVIDER_MODEL`. Значения понадобятся, чтобы зарегистрировать
 `LLMModel` в UI (раздел 5). Подойдёт любой OpenAI-совместимый endpoint:
 OpenAI, OpenRouter, self-hosted vLLM/Ollama и т.п.
+
+Для анализа кода заполните `PROMPTFOO_API_KEY` — его docker compose
+передаёт сервису `scanner-promptfoo`. Анализ выполняет облако Promptfoo:
+код проверяемого агента уходит к ним. Для своего сервера Promptfoo
+(Enterprise On-Prem) задайте `PROMPTFOO_CODE_SCAN_API_HOST`. После
+изменения ключа пересоздайте сервис: `docker compose up -d scanner-promptfoo`.
 
 ## 2. Запуск стека
 
@@ -35,12 +43,22 @@ docker compose up -d --build
 | `proxy` | http://localhost:8100 |
 | `launcher` | http://localhost:8400 |
 
-`scanner` работает без опубликованного порта — `control-api` обращается к
-нему по внутренней сети. Проверка: `curl localhost:8000/health`.
+Сканеры `scanner-deepteam` и `scanner-promptfoo` работают без опубликованного
+порта — `control-api` обращается к ним по внутренней сети. Проверка:
+`curl localhost:8000/health`.
 
-## 3. Включение `launcher` и `scanner`
+> Если стек поднимался до разделения сканеров, удалите старый контейнер
+> `scanner`: `docker compose up -d --build --remove-orphans`.
 
-`launcher` и `scanner` работают с Kubernetes-кластером по kubeconfig
+Только анализ кода, без кластера (сеть `kind` не нужна):
+
+```
+docker compose up -d --build control-api web scanner-promptfoo
+```
+
+## 3. Включение `launcher` и `scanner-deepteam`
+
+`launcher` и `scanner-deepteam` работают с Kubernetes-кластером по kubeconfig
 `.kube-kind-config.yaml` (bind-mount). Если файла нет — `launcher` не
 сможет ничего запустить, а сканирование упадёт на фазе «Запуск агента».
 
@@ -93,7 +111,7 @@ data:
     help: "https://kind.sigs.k8s.io/docs/user/local-registry/"
 EOF
 
-# 4. Kubeconfig для launcher/scanner — внутренний адрес (они в сети kind),
+# 4. Kubeconfig для launcher/scanner-deepteam — внутренний адрес (они в сети kind),
 #    не host-mapped
 export PATH="$HOME/bin:$PATH"
 kind get kubeconfig --name agent-scanner --internal > .kube-kind-config.yaml
@@ -155,6 +173,32 @@ curl -s -X POST localhost:8000/llm-models -H "Content-Type: application/json" \
 результатов: доля пройденных проверок и разбивка по уязвимостям (статус
 «Устойчив»/«Уязвим», риск, обоснование модели-судьи).
 
+### Анализ кода
+
+**Сканирования → Новое сканирование**, тип «Анализ кода (promptfoo)»:
+имя, агент (берутся его репозиторий, ветка и токен), минимальная
+серьёзность и, при желании, дополнительные инструкции сканеру. LLM-модель
+не нужна, кластер тоже.
+
+```
+Инициализация → Клонирование → Анализ кода → Сохранение результатов →
+Завершено
+```
+
+Анализ обычно идёт 3–20 минут; пока он идёт, в журнал раз в 30 секунд
+пишется, сколько прошло времени. Результат — счётчики по серьёзности,
+общий вывод сканера и таблица находок; по клику на находку — рекомендация
+и готовый промпт для AI-ассистента.
+
+Через API:
+
+```
+curl -s -X POST localhost:8000/scans -H "Content-Type: application/json" \
+  -d '{"name":"code","type":"code_scan","agent_config_id":1,"status":"pending","session_id":"scan-code-1","config":"{\"min_severity\":\"medium\"}"}'
+curl -s -X POST localhost:8000/scans/<id>/start
+curl -s "localhost:8000/scans/<id>/logs"
+```
+
 ## 8. События
 
 **События** — перехваченный трафик агента к LLM. Строки обновляются
@@ -195,7 +239,7 @@ docker compose restart control-api     # применит миграцию
 
 ## 11. Диагностика
 
-- **`launcher`/`scanner` не видят кластер.** Проверьте, что
+- **`launcher`/`scanner-deepteam` не видят кластер.** Проверьте, что
   `.kube-kind-config.yaml` существует и свежий (адрес меняется при
   пересоздании кластера): `kubectl --context kind-agent-scanner get nodes`.
 - **Под агента не поднимается.** `kubectl get pods -n scan-<slug(session_id)>`
@@ -214,6 +258,13 @@ docker compose restart control-api     # применит миграцию
 - **Провайдер отвечает `MissingSessionID` / `x-opencode-session`.** Значит,
   сайдкар Pod'а работает со старым образом прокси. Пересоберите и запушьте
   образ в локальный реестр (раздел 3) и запустите агента заново.
+- **Анализ кода падает на «Инициализация» с `PROMPTFOO_API_KEY`.** Ключ не
+  задан: заполните его в `.env` и пересоздайте
+  `docker compose up -d scanner-promptfoo`.
+- **Анализ кода падает на «Клонирование».** Неверный адрес, ветка или
+  токен репозитория в конфигурации агента. Токен в журнал не пишется.
+- **«Сканер пока не подключён» при запуске.** Тип скана без своего сервиса
+  (`mcp`, `agent_skills`) — так и задумано.
 - **`403 namespace is being terminated` при `/launch`.** Ретест сразу после
   `/stop`: namespace ещё удаляется. Дождитесь, пока
   `kubectl get ns` перестанет показывать `scan-*`, и повторите запуск.

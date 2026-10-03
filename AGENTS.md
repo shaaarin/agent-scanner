@@ -1,7 +1,8 @@
 # Agent Scanner — карта для разработки
 
 Платформа для проверки безопасности LLM-агентов с вызовом инструментов:
-динамическое тестирование атаками и перехват реального трафика агента к LLM.
+динамическое тестирование атаками, статический анализ кода агента и перехват
+реального трафика агента к LLM.
 
 **Перед нетривиальными изменениями прочитайте `docs/architecture.md` и
 `docs/running-locally.md`.** Этот файл — карта, а не замена им.
@@ -23,7 +24,8 @@
 |---|---|
 | `control-api` | FastAPI + SQLModel/SQLite. Единый источник данных: `LLMModel`, `AgentConfig`, `Scan`, `ScanLog`, `TrafficEvent`. Миграции — Alembic на старте. |
 | `proxy` | mitmproxy-аддон (`addon.py`). Журналирует трафик агента к LLM и подставляет заголовки идентификации клиента. |
-| `scanner` | Исполняет скан: поднимает агента через `launcher`, гоняет DeepTeam, пишет фазы/журнал/результаты. |
+| `scanner-deepteam` (`scanner/deepteam`) | Скан `deep_team`: поднимает агента через `launcher`, гоняет DeepTeam, пишет фазы/журнал/результаты. |
+| `scanner-promptfoo` (`scanner/promptfoo`) | Скан `code_scan`: клонирует репозиторий агента и прогоняет `promptfoo code-scans`. kind/launcher не нужны. |
 | `launcher` | Собирает образ агента в кластере (git-clone + Kaniko) и запускает Pod с MITM-сайдкаром, по kubeconfig, без Docker-сокета. |
 | `web` | React/Vite дашборд. **Весь текст интерфейса — на русском**, новый текст тоже. |
 | `control-api-mitm-bridge` / `launcher-mitm-bridge` | `alpine/socat`-форвардеры, владеющие опубликованным портом вместо dual-homed сервисов (quirk WSL2, см. ниже). |
@@ -50,10 +52,24 @@
   (замороженный снимок); старые БД автоматически помечаются ей.
   **Никогда не удаляйте том `agent-scanner_control-api-data`.**
 - **Открытые страницы.** `Scan`-флоу: `POST /scans/{id}/start` (control-api)
-  дёргает `scanner`, тот пишет `ScanLog`/фазу, UI опрашивает
+  дёргает сканер своего типа, тот пишет `ScanLog`/фазу, UI опрашивает
   `GET /scans/{id}/logs?after_id=...`. API: `/scans`, `/scans/{id}/logs`,
   `/llm-models`, `/agent-configs`, `/events`, `/events/{id}`,
   `/library/articles`.
+- **Один сканер — один сервис.** Каждый тип скана выполняет свой сервис из
+  `scanner/<имя>` (`scanner-<имя>` в compose) с одинаковым контрактом:
+  `GET /health`, `POST /run/{scan_id}` (ответ сразу, работа в фоне),
+  прогресс/результаты — в control-api через `PATCH /scans/{id}` и
+  `POST /scans/{id}/logs`. Связка «тип → сервис» — `SCANNERS` в
+  `control-api/app/api/scans.py`; тип без сканера (`mcp`, `agent_skills`)
+  запустить нельзя (400). Новый сканер = новая папка + сервис в compose +
+  строка в `SCANNERS` + значение `ScanType` + фазы/результаты в `web`.
+  Общий код между сканерами не выносится: `control_client.py` у каждого свой.
+- **Анализ кода — облако Promptfoo.** `scanner-promptfoo` отправляет код
+  агента в Promptfoo (ключ `PROMPTFOO_API_KEY` из `.env`); модель анализа
+  выбирает Promptfoo, `LLMModel` не участвует. Версия CLI зафиксирована в
+  `scanner/promptfoo/Dockerfile`, формат результатов — в
+  `docs/code-scan-architecture.md`.
 - **Прокси идентифицирует клиента.** На исходящих `chat/completions`
   ставится `User-Agent` (`LLM_CLIENT_USER_AGENT`) и, для `opencode.ai`,
   `x-opencode-session: <SESSION_ID>`. Тело/промпт не переписываются.
@@ -87,8 +103,8 @@ cp .env.example .env   # заполнить LLM_PROVIDER_*
 docker compose up -d --build
 ```
 
-`launcher`/`scanner` требуют Kubernetes-кластер (агенты собираются и
-запускаются как Pod'ы) — разовая настройка `kind` в
+`launcher`/`scanner-deepteam` требуют Kubernetes-кластер (агенты собираются и
+запускаются как Pod'ы; `scanner-promptfoo` работает без кластера) — разовая настройка `kind` в
 `docs/running-locally.md`. Если `kind`/`kubectl` нет в `PATH`, проверьте
 `~/bin` прежде чем устанавливать заново.
 
@@ -97,7 +113,7 @@ docker compose up -d --build
 `docs/running-locally.md`).
 
 **Автотестов нет.** Проверка живая: поднять нужные сервисы (и `kind` для
-launcher/scanner), прогнать реальный HTTP/k8s сценарий, посмотреть
+launcher/scanner-deepteam), прогнать реальный HTTP/k8s сценарий, посмотреть
 `control-api` `/events`, логи и `kubectl get pods`/`logs`. Придерживайтесь
 этого, не добавляйте тест-фреймворк без запроса.
 

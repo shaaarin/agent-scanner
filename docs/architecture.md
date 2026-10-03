@@ -12,6 +12,10 @@ Agent Scanner проверяет LLM-агентов с вызовом инстр
 - **наблюдение** — весь трафик агента к LLM журналируется, и по каждому
   обмену можно посмотреть тела запроса и ответа.
 
+Отдельно от перехвата работает **анализ кода**: платформа клонирует
+репозиторий агента и проверяет исходники через promptfoo code-scans, не
+запуская агента (см. §7.2 и [`code-scan-architecture.md`](code-scan-architecture.md)).
+
 ## 2. Компоненты
 
 ```
@@ -19,34 +23,37 @@ Agent Scanner проверяет LLM-агентов с вызовом инстр
                        │  HTTP
                        ▼
                  ┌───────────┐        ┌──────────────┐
-                 │    web    │──────▶ │ control-api  │◀──── scanner
+                 │    web    │──────▶ │ control-api  │◀──── сканеры: журнал, фаза, результаты
                  └───────────┘        └──────┬───────┘
-                                             │ /scans/{id}/start
-                                             ▼
-                                        ┌───────────┐   build/launch   ┌──────────┐
-                                        │  scanner  │─────────────────▶│ launcher │
-                                        └─────┬─────┘                  └────┬─────┘
-                                              │ DeepTeam (LLM)              │ k8s
-                                              ▼                             ▼
-                                        ┌───────────┐               ┌───────────────┐
-                                        │ провайдер │               │ Pod агента +  │
-                                        │   LLM     │               │ mitm-proxy    │
-                                        └───────────┘               └───────┬───────┘
-                                                                             │ перехват
-                                                                             ▼
-                                                                      ┌───────────┐
-                                                                      │  proxy    │
-                                                                      └─────┬─────┘
-                                                                            │ TrafficEvent
-                                                                            ▼
-                                                                      control-api
+                                             │ /scans/{id}/start → сканер по типу скана
+                      ┌──────────────────────┴────────────────────────┐
+                      │ deep_team                                     │ code_scan
+                      ▼                                               ▼
+             ┌──────────────────┐ build/launch ┌──────────┐ ┌───────────────────┐
+             │ scanner-deepteam │─────────────▶│ launcher │ │ scanner-promptfoo │
+             └────────┬─────────┘              └────┬─────┘ └─────────┬─────────┘
+                      │ DeepTeam (LLM)              │ k8s             │ git clone +
+                      ▼                             ▼                 │ promptfoo code-scans
+                ┌───────────┐               ┌───────────────┐         ▼
+                │ провайдер │               │ Pod агента +  │ ┌───────────────────┐
+                │   LLM     │               │ mitm-proxy    │ │  Promptfoo Cloud  │
+                └───────────┘               └───────┬───────┘ └───────────────────┘
+                                                    │ перехват
+                                                    ▼
+                                              ┌───────────┐
+                                              │  proxy    │
+                                              └─────┬─────┘
+                                                    │ TrafficEvent
+                                                    ▼
+                                               control-api
 ```
 
 | Сервис | Назначение |
 |---|---|
 | `control-api` | FastAPI + SQLModel/SQLite. Хранит модели, конфиги агентов, сканы, журналы и события. Применяет миграции Alembic на старте. |
 | `proxy` | mitmproxy-аддон (`proxy/addon.py`). Точка перехвата трафика агента; журналирует запросы/ответы и помечает клиента. |
-| `scanner` | Исполняет скан: поднимает агента через `launcher`, прогоняет DeepTeam, пишет фазы/журнал/результаты. |
+| `scanner-deepteam` | `scanner/deepteam`. Скан `deep_team`: поднимает агента через `launcher`, прогоняет DeepTeam, пишет фазы/журнал/результаты. |
+| `scanner-promptfoo` | `scanner/promptfoo`. Скан `code_scan`: клонирует репозиторий агента, прогоняет `promptfoo code-scans`, пишет фазы/журнал/находки. Без kind и launcher. |
 | `launcher` | Собирает образ агента в кластере (git-clone + Kaniko) и запускает Pod с MITM-сайдкаром. Работает с внешним кластером по kubeconfig, без Docker-сокета. |
 | `web` | Дашборд (React/Vite). Текст интерфейса — на русском. |
 | `control-api-mitm-bridge`, `launcher-mitm-bridge` | `alpine/socat`-форвардеры, владеющие опубликованным на хост портом вместо dual-homed сервисов (особенность WSL2/Docker Desktop, см. `CLAUDE.md`). |
@@ -82,9 +89,13 @@ Agent Scanner проверяет LLM-агентов с вызовом инстр
 1. `POST /scans` создаёт `Scan` со статусом `pending`.
 2. `POST /scans/{id}/start` (control-api):
    - очищает журнал скана, ставит `running` и фазу `Запуск`;
-   - синхронно дёргает `scanner` (`POST {SCANNER_URL}/run/{id}`).
-     `scanner` отвечает сразу и выполняет работу в фоне.
-3. `scanner` проходит фазы, записывая `ScanLog` и текущую фазу в `Scan`:
+   - синхронно дёргает сканер своего типа (`POST <url сканера>/run/{id}`,
+     связка «тип → сервис» — `SCANNERS` в `control-api/app/api/scans.py`).
+     Сканер отвечает сразу и выполняет работу в фоне. Для типа без сканера
+     запуск отклоняется с 400 ещё до перевода в `running`; если сканер
+     недоступен или ответил ошибкой — скан сразу `failed`.
+3. `scanner-deepteam` проходит фазы, записывая `ScanLog` и текущую фазу в `Scan`
+   (фазы `scanner-promptfoo` — в §7.2):
    - **Инициализация** — читает скан, конфиг агента и модель-судью;
    - **Запуск агента** — `POST launcher/launch {scan_id}` (сборка может
      занять минуты);
@@ -94,12 +105,17 @@ Agent Scanner проверяет LLM-агентов с вызовом инстр
    - **Сохранение результатов** — пишет результаты и переводит скан в
      `completed`.
 4. Любая ошибка журналируется (уровень `error`) и переводит скан в
-   `failed` с текстом в `Scan.error`.
+   `failed` с текстом в `Scan.error`. Для DeepTeam ошибкой считается и
+   прогон, в котором ни один кейс не удалось оценить (например, провайдер
+   LLM отвечает `RateLimitError`): таблица упавших кейсов остаётся в
+   `Scan.results`. Если ошибкой завершилась только часть кейсов, скан
+   `completed`, а в журнале — предупреждение.
 5. UI страницы скана опрашивает `GET /scans/{id}/logs?after_id=...` и
    `GET /scans/{id}` каждые 2 секунды, пока скан не завершён.
 
 Статусы: `pending`, `running`, `completed`, `failed`.
-Типы: `deep_team` (реализован), `mcp` и `agent_skills` (заглушки в UI).
+Типы: `deep_team` и `code_scan` (реализованы), `mcp` и `agent_skills`
+(заглушки в UI, запуск отклоняется).
 
 ## 5. Модель данных
 
@@ -111,8 +127,14 @@ Agent Scanner проверяет LLM-агентов с вызовом инстр
 | `ScanLog` | Строка журнала скана: `level` (`info`/`success`/`error`), `phase`, `message`, `created_at`. |
 | `TrafficEvent` | Перехваченный обмен: `session_id`, `scan_id`, `flow_id`, `direction` (`request`/`response`), `provider`, `host`, `path`, полное тело `raw_excerpt`, `upstream_base_url`. |
 
-`Scan.config` для динамического тестирования:
-`{"eval_llm_model_id": <id>, "vulnerabilities": [...], "attacks": [...]}`.
+`Scan.config` по типам:
+
+- `deep_team`: `{"eval_llm_model_id": <id>, "vulnerabilities": [...], "attacks": [...]}`;
+- `code_scan`: `{"min_severity": "low|medium|high|critical", "guidance": <текст|null>}`.
+
+`Scan.results` по типам: `deep_team` — `vulnerability_results` и
+`overall_score` (§7.1), `code_scan` — `summary` и `findings` (§7.2).
+`scan.type` в базе — строка, поэтому новый тип скана миграции не требует.
 
 ## 6. Прокси
 
@@ -129,12 +151,26 @@ Agent Scanner проверяет LLM-агентов с вызовом инстр
   - `x-opencode-session: <SESSION_ID>` — только для хостов `opencode.ai`.
 
 Сканер делает то же самое для собственных вызовов к провайдеру
-(`scanner/app/deepteam_runner.py::provider_headers`), используя
+(`scanner/deepteam/app/deepteam_runner.py::provider_headers`), используя
 `Scan.session_id` как стабильный идентификатор диалога.
 
-## 7. Scanner (динамическое тестирование)
+## 7. Сканеры
 
-`scanner/app/` — FastAPI-обёртка над DeepTeam:
+Каждый тип скана выполняет свой сервис из `scanner/<имя>` со своим образом
+и зависимостями. Контракт у всех один:
+
+- `GET /health`;
+- `POST /run/{scan_id}` — ответ сразу, работа в фоновом потоке, повторный
+  запуск того же скана игнорируется;
+- фаза, журнал и результат пишутся в control-api через `PATCH /scans/{id}`
+  и `POST /scans/{id}/logs`; ошибка — `failed` с текстом в `Scan.error`.
+
+Общий код между сканерами не выносится: клиент к control-api
+(`control_client.py`) у каждого свой.
+
+### 7.1. scanner-deepteam (динамическое тестирование)
+
+`scanner/deepteam/app/` — FastAPI-обёртка над DeepTeam:
 
 - `runner.py` — оркестрация фаз (см. §4), запуск в отдельном потоке,
   защита от повторного запуска.
@@ -148,6 +184,24 @@ Agent Scanner проверяет LLM-агентов с вызовом инстр
 - Модель-судья (симулятор и оценка) — `LLMModel` из `Scan.config`.
 - Кейс считается пройденным, если его score ниже порога 0.5;
   `overall_score` — доля пройденных кейсов.
+
+### 7.2. scanner-promptfoo (анализ кода)
+
+`scanner/promptfoo/app/` — FastAPI-обёртка над CLI `promptfoo code-scans`
+(образ на Node 24 LTS, версия promptfoo зафиксирована в `Dockerfile`).
+Агент не собирается и не запускается.
+
+Фазы: **Инициализация** (скан, конфиг агента, параметры, наличие
+`PROMPTFOO_API_KEY`) → **Клонирование** (`git clone --depth 1` ветки
+`git_ref`, токен — как в launcher) → **Анализ кода** (`promptfoo code-scans
+run --json`, heartbeat в журнал раз в 30 с, таймаут `SCAN_CODE_TIMEOUT`) →
+**Сохранение результатов** → **Завершено**.
+
+promptfoo сканирует только изменения между двумя коммитами, поэтому для
+аудита всей ветки в клоне создаются два служебных коммита: пустой и с
+деревом ветки (`git commit-tree`). Анализ выполняет облако Promptfoo: код
+агента уходит к ним. Подробности, формат `Scan.results` и ограничения — в
+[`code-scan-architecture.md`](code-scan-architecture.md).
 
 ## 8. Launcher
 
@@ -205,10 +259,14 @@ Agent Scanner проверяет LLM-агентов с вызовом инстр
   сценарий, посмотреть `/events` и логи Pod'ов.
 - **Синтетические атаки DeepTeam зависят от провайдера.** Часть моделей
   отклоняет генерацию атак по политике безопасности провайдера.
+- **Анализ кода уходит в облако Promptfoo.** Модель анализа выбирает
+  Promptfoo, `LLMModel` не участвует; нужен `PROMPTFOO_API_KEY`.
+- **Перезапуск сканера посреди скана** оставляет скан в `running` —
+  для обоих сканеров.
 
 ## 12. Легаси
 
 Каталоги `generator/` и `interactor/` относятся к предыдущей архитектуре
 (кампании, шаблоны, fuzz/tree-движки) и **не входят в `docker-compose.yml`**.
 Контроллер-API больше не содержит их эндпоинтов. Считайте их неактивными;
-актуальный сценарий — динамическое тестирование через `scanner`.
+актуальные сценарии — сканеры из `scanner/`.

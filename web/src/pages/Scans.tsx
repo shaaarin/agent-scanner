@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../api/client";
-import type { Scan, ScanType, AgentConfig, LLMModel } from "../api/types";
+import type { Scan, ScanType, AgentConfig, LLMModel, CodeScanSeverity } from "../api/types";
+import { SEVERITY_LABELS, SEVERITY_ORDER, scanTypeLabel } from "../api/scanTypes";
 import { PageHeader } from "../components/PageHeader";
 
 const DEEPTEAM_VULNERABILITIES = [
@@ -36,6 +37,13 @@ export function Scans() {
   const [selectedLlmModelId, setSelectedLlmModelId] = useState<number | null>(null);
   const [selectedVulnerabilities, setSelectedVulnerabilities] = useState<string[]>([]);
   const [selectedAttacks, setSelectedAttacks] = useState<string[]>([]);
+  const [minSeverity, setMinSeverity] = useState<CodeScanSeverity>("medium");
+  const [guidance, setGuidance] = useState("");
+  const [startError, setStartError] = useState<string | null>(null);
+
+  // Модель-судья нужна только динамическому тестированию (DeepTeam).
+  const needsLlmModel = newScanType === "deep_team";
+  const canCreate = Boolean(newScanName && selectedAgentId && (!needsLlmModel || selectedLlmModelId));
 
   useEffect(() => {
     Promise.all([
@@ -54,15 +62,17 @@ export function Scans() {
   }, [scans]);
 
   const handleCreateScan = async () => {
-    if (!newScanName || !selectedAgentId || !selectedLlmModelId) return;
+    if (!canCreate) return;
 
-    const config: Record<string, unknown> = {
-      eval_llm_model_id: selectedLlmModelId,
-    };
-    
+    const config: Record<string, unknown> = {};
+
     if (newScanType === "deep_team") {
+      config.eval_llm_model_id = selectedLlmModelId;
       config.vulnerabilities = selectedVulnerabilities.length > 0 ? selectedVulnerabilities : ["BFLA", "BOLA", "RBAC"];
       config.attacks = selectedAttacks.length > 0 ? selectedAttacks : ["PromptInjection"];
+    } else if (newScanType === "code_scan") {
+      config.min_severity = minSeverity;
+      config.guidance = guidance.trim() || null;
     }
 
     try {
@@ -80,6 +90,8 @@ export function Scans() {
       setSelectedLlmModelId(null);
       setSelectedVulnerabilities([]);
       setSelectedAttacks([]);
+      setMinSeverity("medium");
+      setGuidance("");
       api.get<Scan[]>("/scans").then(setScans);
     } catch (error) {
       console.error("Failed to create scan:", error);
@@ -87,11 +99,13 @@ export function Scans() {
   };
 
   const handleStartScan = async (scanId: number) => {
+    setStartError(null);
     try {
       await api.post(`/scans/${scanId}/start`, {});
       navigate(`/scans/${scanId}`);
     } catch (error) {
       console.error("Failed to start scan:", error);
+      setStartError(error instanceof Error ? error.message : String(error));
     }
   };
 
@@ -120,20 +134,11 @@ export function Scans() {
     return <span className={`badge ${colors[status] || "badge-secondary"}`}>{labels[status] || status}</span>;
   };
 
-  const getTypeLabel = (type: ScanType) => {
-    const labels: Record<ScanType, string> = {
-      deep_team: "Динамическое тестирование",
-      mcp: "MCP",
-      agent_skills: "Agent Skills",
-    };
-    return labels[type];
-  };
-
   return (
     <div>
       <PageHeader
         title="Сканирования"
-        description="Проверка безопасности агентов: динамическое тестирование, MCP и Agent Skills."
+        description="Проверка безопасности агентов: динамическое тестирование, анализ кода, MCP и Agent Skills."
         actions={
           <button
             className="btn btn-primary"
@@ -143,6 +148,12 @@ export function Scans() {
           </button>
         }
       />
+
+      {startError && (
+        <div className="card" style={{ padding: "1rem 1.5rem", marginBottom: "1rem", borderLeft: "0.3rem solid var(--danger)" }}>
+          <span style={{ color: "var(--danger)" }}>Не удалось запустить сканирование: {startError}</span>
+        </div>
+      )}
 
       <div className="card">
         {scans.length === 0 ? (
@@ -176,7 +187,7 @@ export function Scans() {
                       {scan.name}
                     </button>
                   </td>
-                  <td style={{ padding: "1rem" }}>{getTypeLabel(scan.type)}</td>
+                  <td style={{ padding: "1rem" }}>{scanTypeLabel(scan.type)}</td>
                   <td style={{ padding: "1rem" }}>{getStatusBadge(scan.status)}</td>
                   <td style={{ padding: "1rem" }}>
                     {new Date(scan.created_at).toLocaleString("ru-RU")}
@@ -229,7 +240,9 @@ export function Scans() {
           >
             <h2 style={{ marginBottom: "0.6rem" }}>Новое сканирование</h2>
             <p style={{ margin: "0 0 1.5rem", color: "var(--text-500)", fontSize: 13 }}>
-              Платформа запустит агента и проверит его ответы на выбранные классы атак.
+              {newScanType === "code_scan"
+                ? "Платформа скачает код агента из его репозитория и проверит его через promptfoo. Агент не запускается, анализ выполняется в облаке Promptfoo."
+                : "Платформа запустит агента и проверит его ответы на выбранные классы атак."}
             </p>
             <div style={{ marginBottom: "1rem" }}>
               <label style={{ display: "block", marginBottom: "0.5rem" }}>Название сканирования</label>
@@ -251,6 +264,7 @@ export function Scans() {
                 style={{ width: "100%" }}
               >
                 <option value="deep_team">Динамическое тестирование</option>
+                <option value="code_scan">Анализ кода (promptfoo)</option>
                 <option value="mcp">MCP (в разработке)</option>
                 <option value="agent_skills">Agent Skills (в разработке)</option>
               </select>
@@ -271,6 +285,7 @@ export function Scans() {
                 ))}
               </select>
             </div>
+            {needsLlmModel && (
             <div style={{ marginBottom: "1rem" }}>
               <label style={{ display: "block", marginBottom: "0.5rem" }}>LLM-модель для оценки</label>
               <select
@@ -290,6 +305,42 @@ export function Scans() {
                 Ею будут генерироваться атаки и оцениваться ответы агента.
               </p>
             </div>
+            )}
+
+            {newScanType === "code_scan" && (
+              <>
+                <div style={{ marginBottom: "1rem" }}>
+                  <label style={{ display: "block", marginBottom: "0.5rem" }}>Минимальная серьёзность</label>
+                  <select
+                    className="input"
+                    value={minSeverity}
+                    onChange={(e) => setMinSeverity(e.target.value as CodeScanSeverity)}
+                    style={{ width: "100%" }}
+                  >
+                    {SEVERITY_ORDER.slice().reverse().map((severity) => (
+                      <option key={severity} value={severity}>
+                        {SEVERITY_LABELS[severity]}
+                      </option>
+                    ))}
+                  </select>
+                  <p style={{ margin: "0.4rem 0 0", fontSize: 12, color: "var(--text-500)" }}>
+                    Проблемы ниже этого уровня в отчёт не попадут.
+                  </p>
+                </div>
+                <div style={{ marginBottom: "1.5rem" }}>
+                  <label style={{ display: "block", marginBottom: "0.5rem" }}>Дополнительные инструкции сканеру</label>
+                  <textarea
+                    className="input"
+                    value={guidance}
+                    onChange={(e) => setGuidance(e.target.value)}
+                    placeholder="Необязательно. Например: основной риск — инструменты работы с базой данных"
+                    rows={3}
+                    maxLength={4000}
+                    style={{ width: "100%", resize: "vertical" }}
+                  />
+                </div>
+              </>
+            )}
 
             {newScanType === "deep_team" && (
               <>
@@ -364,7 +415,7 @@ export function Scans() {
               <button
                 className="btn btn-primary"
                 onClick={handleCreateScan}
-                disabled={!newScanName || !selectedAgentId || !selectedLlmModelId}
+                disabled={!canCreate}
               >
                 Создать
               </button>

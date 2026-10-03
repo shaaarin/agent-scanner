@@ -1,17 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { api } from "../api/client";
-import type { Scan, AgentConfig, ScanResults, ScanLog } from "../api/types";
+import type { Scan, AgentConfig, ScanResults, ScanLog, CodeScanResults as CodeScanResultsData } from "../api/types";
+import { SCAN_PHASES, scanTypeLabel } from "../api/scanTypes";
 import { PageHeader } from "../components/PageHeader";
-
-const PHASES = [
-  "Инициализация",
-  "Запуск агента",
-  "Ожидание агента",
-  "Тестирование",
-  "Сохранение результатов",
-  "Завершено",
-];
+import { CodeScanResults } from "../components/CodeScanResults";
 
 const TERMINAL_STATUSES = ["completed", "failed"];
 
@@ -97,16 +90,8 @@ export function ScansDetail() {
     return <span className={`badge ${colors[status] || "badge-secondary"}`}>{labels[status] || status}</span>;
   };
 
-  const getTypeLabel = (type: string) => {
-    const labels: Record<string, string> = {
-      deep_team: "Динамическое тестирование",
-      mcp: "MCP",
-      agent_skills: "Agent Skills",
-    };
-    return labels[type] || type;
-  };
-
-  const currentPhaseIndex = scan?.phase ? PHASES.indexOf(scan.phase) : -1;
+  const phases = scan ? SCAN_PHASES[scan.type] ?? [] : [];
+  const currentPhaseIndex = scan?.phase ? phases.indexOf(scan.phase) : -1;
 
   if (!scan) {
     return <div>Загрузка сканирования…</div>;
@@ -117,12 +102,12 @@ export function ScansDetail() {
       <div>
       <PageHeader
         title={scan.name}
-        description={`${getTypeLabel(scan.type)} · сканирование`}
+        description={`${scanTypeLabel(scan.type)} · сканирование`}
       />
       <div className="card" style={{ padding: "3.2rem", textAlign: "center" }}>
         <h2 style={{ marginBottom: "1rem" }}>В разработке</h2>
         <p style={{ color: "var(--text-600)", margin: 0 }}>
-          Сканирование типа {getTypeLabel(scan.type)} пока не реализовано.
+          Сканирование типа {scanTypeLabel(scan.type)} пока не реализовано.
         </p>
         <button className="btn btn-secondary" onClick={() => navigate("/scans")} style={{ marginTop: "1.6rem" }}>
           Назад к списку
@@ -136,7 +121,7 @@ export function ScansDetail() {
     <div>
       <PageHeader
         title={scan.name}
-        description={`${getTypeLabel(scan.type)} · сканирование`}
+        description={`${scanTypeLabel(scan.type)} · сканирование`}
         actions={
           <div style={{ display: "flex", gap: "0.5rem" }}>
             {scan.status === "pending" && (
@@ -160,7 +145,7 @@ export function ScansDetail() {
           </div>
           <div>
             <div style={{ color: "var(--text-600)", fontSize: "0.9rem" }}>Тип</div>
-            <div style={{ marginTop: "0.25rem" }}>{getTypeLabel(scan.type)}</div>
+            <div style={{ marginTop: "0.25rem" }}>{scanTypeLabel(scan.type)}</div>
           </div>
           <div>
             <div style={{ color: "var(--text-600)", fontSize: "0.9rem" }}>Агент</div>
@@ -196,7 +181,7 @@ export function ScansDetail() {
           <h3 style={{ marginBottom: "1rem" }}>Прогресс</h3>
 
           <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", marginBottom: "1.5rem" }}>
-            {PHASES.map((phase, index) => {
+            {phases.map((phase, index) => {
               const done = currentPhaseIndex >= 0 && index < currentPhaseIndex;
               const current = index === currentPhaseIndex;
               const color = scan.status === "failed" && current
@@ -269,7 +254,9 @@ export function ScansDetail() {
             Сканирование ещё не запускалось
           </p>
           <p style={{ color: "var(--text-500)", fontSize: 13, margin: "0.6rem 0 0" }}>
-            Платформа соберёт агента, поднимет его и проверит ответы на выбранные атаки.
+            {scan.type === "code_scan"
+              ? "Платформа скачает код агента и проверит его через promptfoo. Агент при этом не запускается."
+              : "Платформа соберёт агента, поднимет его и проверит ответы на выбранные атаки."}
           </p>
           <button className="btn btn-primary" onClick={handleStart} disabled={starting} style={{ marginTop: "1.6rem" }}>
             {starting ? "Запуск…" : "Запустить сканирование"}
@@ -284,11 +271,16 @@ export function ScansDetail() {
         </div>
       )}
 
-      {scan.status === "completed" && results && (
-        <div className="card" style={{ padding: "2rem" }}>
-          <h3 style={{ marginBottom: "1.5rem" }}>Результаты</h3>
+      {scan.status === "completed" && results && scan.type === "code_scan" && (
+        <CodeScanResults results={results as unknown as CodeScanResultsData} />
+      )}
 
-          {results.overall_score !== undefined && (
+      {results && scan.type !== "code_scan" &&
+        (scan.status === "completed" || (scan.status === "failed" && (results.vulnerability_results?.length ?? 0) > 0)) && (
+        <div className="card" style={{ padding: "2rem", marginTop: scan.status === "failed" ? "2rem" : undefined }}>
+          <h3 style={{ marginBottom: "1.5rem" }}>{scan.status === "failed" ? "Кейсы" : "Результаты"}</h3>
+
+          {scan.status === "completed" && results.overall_score !== undefined && (
             <div style={{ marginBottom: "2rem", padding: "1.2rem", background: "var(--background-generic)", borderRadius: "var(--radius-m)" }}>
               <div style={{ color: "var(--text-600)", fontSize: "0.9rem" }}>Доля пройденных проверок</div>
               <div style={{ fontSize: "2rem", fontWeight: "bold", marginTop: "0.5rem" }}>
