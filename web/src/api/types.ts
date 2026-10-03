@@ -66,7 +66,7 @@ export interface AgentConfig {
   created_at: string;
 }
 
-export type ScanType = "deep_team" | "mcp" | "agent_skills";
+export type ScanType = "deep_team" | "code_scan" | "mcp" | "agent_skills";
 export type ScanStatus = "pending" | "running" | "completed" | "failed";
 
 export interface Scan {
@@ -114,11 +114,42 @@ export interface ScanLog {
   created_at: string;
 }
 
+export type CodeScanSeverity = "critical" | "high" | "medium" | "low";
+
 export interface ScanConfig {
+  // deep_team
   eval_llm_model_id?: number;
   vulnerabilities?: string[];
   attacks?: string[];
   frameworks?: string[];
+  // code_scan
+  min_severity?: CodeScanSeverity;
+  guidance?: string | null;
+}
+
+export interface CodeScanFinding {
+  file: string | null;
+  line: number | null;
+  start_line: number | null;
+  severity: CodeScanSeverity;
+  finding: string;
+  fix: string | null;
+  ai_agent_prompt: string | null;
+}
+
+// Scan.results для type = "code_scan" (пишет scanner-promptfoo).
+export interface CodeScanResults {
+  engine: string;
+  engine_version?: string;
+  git_ref?: string;
+  commit?: string;
+  files_in_scope?: number;
+  min_severity?: CodeScanSeverity;
+  duration_sec?: number;
+  review: string | null;
+  summary: Record<CodeScanSeverity, number> & { total: number };
+  findings: CodeScanFinding[];
+  error?: string;
 }
 
 export interface ScanResults {

@@ -186,6 +186,7 @@ def results_to_payload(results: list) -> dict:
                 "vulnerability": label,
                 "passed": passed,
                 "errored": errored,
+                "error": str(error) if errored else None,
                 "score": score,
                 "reasoning": getattr(case, "reason", None) or error or "",
             }

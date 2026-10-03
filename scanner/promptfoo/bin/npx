@@ -1,0 +1,20 @@
+#!/bin/sh
+# Обёртка npx для scanner-promptfoo.
+#
+# promptfoo 0.123.x поднимает filesystem-MCP командой
+#   npx -y @modelcontextprotocol/server-filesystem <корень репо>
+# с рабочим каталогом внутри сканируемого репозитория. Настоящий npx при этом
+# скачивает пакет из npm на каждом скане и читает .npmrc сканируемого репо, то
+# есть чужой репозиторий может подменить запускаемый код. Здесь этот вызов
+# выполняет заранее установленную в образ версию сервера, без сети; любые
+# другие вызовы npx запрещены.
+set -eu
+
+SERVER_ENTRY="/usr/local/lib/node_modules/@modelcontextprotocol/server-filesystem/dist/index.js"
+
+if [ "$#" -eq 3 ] && [ "$1" = "-y" ] && [ "$2" = "@modelcontextprotocol/server-filesystem" ]; then
+  exec /usr/local/bin/node "$SERVER_ENTRY" "$3"
+fi
+
+echo "agent-scanner: npx в scanner-promptfoo запрещён, кроме запуска filesystem-MCP (аргументы: $*)" >&2
+exit 1

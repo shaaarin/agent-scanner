@@ -111,9 +111,14 @@ class TrafficEvent(SQLModel, table=True):
 
 
 class ScanType(str, Enum):
-    DEEP_TEAM = "deep_team"
-    MCP = "mcp"
-    AGENT_SKILLS = "agent_skills"
+    """Каждый реализованный тип выполняет свой сервис-сканер (см.
+    `app/api/scans.py::SCANNERS`). Колонка `scan.type` строковая, поэтому новый
+    тип не требует миграции."""
+
+    DEEP_TEAM = "deep_team"  # scanner-deepteam: динамическое тестирование
+    CODE_SCAN = "code_scan"  # scanner-promptfoo: анализ исходного кода
+    MCP = "mcp"  # заглушка в UI, сканера пока нет
+    AGENT_SKILLS = "agent_skills"  # заглушка в UI, сканера пока нет
 
 
 class ScanStatus(str, Enum):
@@ -135,11 +140,14 @@ class Scan(SQLModel, table=True):
     status: ScanStatus = ScanStatus.PENDING
     session_id: str = Field(index=True)  # Links scan to proxy session
     # JSON config specific to scan type:
-    # - DEEP_TEAM: {"vulnerabilities": [...], "attacks": [...], "frameworks": [...]}
+    # - DEEP_TEAM: {"eval_llm_model_id": int, "vulnerabilities": [...], "attacks": [...]}
+    # - CODE_SCAN: {"min_severity": "low|medium|high|critical", "guidance": str | null}
     # - MCP: {} (placeholder)
     # - AGENT_SKILLS: {} (placeholder)
     config: str = Field(default="{}", sa_column=Column(JSON))
-    # JSON results: {"vulnerability_results": [...], "overall_score": float, ...}
+    # JSON results, shape depends on type:
+    # - DEEP_TEAM: {"vulnerability_results": [...], "overall_score": float}
+    # - CODE_SCAN: {"engine": "promptfoo-code-scans", "summary": {...}, "findings": [...], ...}
     results: Optional[str] = Field(default=None, sa_column=Column(JSON))
     # High-level progress state, written by scanner as it moves through phases
     # ("Инициализация", "Запуск агента", ...). The detailed per-line log lives

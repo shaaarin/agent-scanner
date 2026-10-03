@@ -13,6 +13,8 @@ page can follow along. Any failure is logged and marks the scan failed.
 import json
 import os
 import time
+from collections import Counter
+from datetime import datetime, timezone
 
 import httpx
 
@@ -25,6 +27,33 @@ _POD_READY_TIMEOUT = float(os.environ.get("SCAN_POD_READY_TIMEOUT", "300"))
 _HTTP_READY_TIMEOUT = float(os.environ.get("SCAN_HTTP_READY_TIMEOUT", "120"))
 
 _running: set[int] = set()
+
+
+class ScanFailed(RuntimeError):
+    """Ошибка скана, у которой есть частичный результат (например, таблица
+    кейсов, упавших с ошибкой) -- он сохраняется в Scan.results вместе с
+    текстом ошибки."""
+
+    def __init__(self, message: str, payload: dict):
+        super().__init__(message)
+        self.payload = payload
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _errors_summary(errored_rows: list[dict]) -> str:
+    """Короткая причина для Scan.error по кейсам с ошибкой."""
+    texts = [str(row.get("error") or row.get("reasoning") or "") for row in errored_rows]
+    joined = " ".join(texts)
+    if any(marker in joined for marker in ("RateLimitError", "insufficient_quota", "429")):
+        return (
+            "провайдер LLM отклоняет запросы (RateLimitError: превышен лимит запросов "
+            "или закончился баланс). Проверьте ключ и лимиты модели-судьи и агента"
+        )
+    most_common = Counter(texts).most_common(1)[0][0] if texts else "без описания"
+    return most_common[:300]
 
 
 def is_running(scan_id: int) -> bool:
@@ -95,7 +124,8 @@ def run_scan(scan_id: int) -> None:
     try:
         _run(scan_id)
     except Exception as exc:  # noqa: BLE001 -- one scan's failure must not kill the thread pool
-        message = f"{type(exc).__name__}: {exc}"
+        message = str(exc) if isinstance(exc, ScanFailed) else f"{type(exc).__name__}: {exc}"
+        payload = {**exc.payload, "error": message} if isinstance(exc, ScanFailed) else {"error": message}
         _log(scan_id, message, level="error", phase="Ошибка")
         control_client.patch_scan(
             scan_id,
@@ -103,7 +133,8 @@ def run_scan(scan_id: int) -> None:
                 "status": "failed",
                 "phase": "Ошибка",
                 "error": message,
-                "results": json.dumps({"error": message}),
+                "results": json.dumps(payload, ensure_ascii=False),
+                "finished_at": _now(),
             },
         )
     finally:
@@ -168,9 +199,36 @@ def _run(scan_id: int) -> None:
 
     _set_phase(scan_id, "Сохранение результатов")
     payload = results_to_payload(results)
-    total = len(payload["vulnerability_results"])
-    passed = sum(1 for row in payload["vulnerability_results"] if row["passed"])
-    _log(scan_id, f"Протестировано кейсов: {total}, пройдено: {passed}", level="success", phase="Сохранение результатов")
+    rows = payload["vulnerability_results"]
+    errored = [row for row in rows if row["errored"]]
+    valid = [row for row in rows if not row["errored"]]
+    passed = sum(1 for row in valid if row["passed"])
+
+    # Кейс с ошибкой (атаку не удалось сгенерировать, агент не ответил,
+    # судья недоступен) -- это не результат теста. Если не оценён ни один
+    # кейс, скан провален, а не «завершён с 0 пройденных».
+    if not rows:
+        raise RuntimeError("DeepTeam не сгенерировал ни одного тест-кейса")
+    if not valid:
+        raise ScanFailed(
+            f"Ни один из {len(rows)} кейсов не удалось проверить: {_errors_summary(errored)}",
+            payload,
+        )
+
+    _log(
+        scan_id,
+        f"Кейсов: {len(rows)}, оценено: {len(valid)}, пройдено: {passed}, с ошибкой: {len(errored)}",
+        level="success",
+        phase="Сохранение результатов",
+    )
+    if errored:
+        _log(
+            scan_id,
+            f"Внимание: {len(errored)} из {len(rows)} кейсов завершились ошибкой и не учтены в оценке: "
+            f"{_errors_summary(errored)}",
+            level="error",
+            phase="Сохранение результатов",
+        )
 
     control_client.patch_scan(
         scan_id,
@@ -179,6 +237,7 @@ def _run(scan_id: int) -> None:
             "phase": "Завершено",
             "results": json.dumps(payload),
             "error": None,
+            "finished_at": _now(),
         },
     )
     _log(scan_id, "Сканирование завершено", level="success", phase="Завершено")
