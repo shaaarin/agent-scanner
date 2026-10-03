@@ -17,6 +17,8 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+import httpx
+
 from app import control_client, promptfoo, repo
 
 SCAN_TYPE = "code_scan"
@@ -76,6 +78,35 @@ def run_scan(scan_id: int) -> None:
         )
     finally:
         _running.discard(scan_id)
+
+
+def fail_interrupted_scans() -> None:
+    """При старте сервиса: скан code_scan в статусе running, который не
+    выполняется в этом процессе, прервался вместе с прошлым запуском сканера
+    и иначе навсегда остался бы «Выполняется»."""
+    try:
+        scans = control_client.list_scans(status="running", scan_type=SCAN_TYPE)
+    except httpx.HTTPError as exc:
+        print(f"[scanner-promptfoo] failed to list running scans: {exc}")
+        return
+    for scan in scans:
+        if scan["id"] in _running:
+            continue
+        message = "Анализ прерван: сервис scanner-promptfoo был перезапущен. Создайте сканирование заново"
+        try:
+            _log(scan["id"], message, level="error", phase="Ошибка")
+            control_client.patch_scan(
+                scan["id"],
+                {
+                    "status": "failed",
+                    "phase": "Ошибка",
+                    "error": message,
+                    "results": json.dumps({"error": message}, ensure_ascii=False),
+                    "finished_at": _now(),
+                },
+            )
+        except httpx.HTTPError as exc:
+            print(f"[scanner-promptfoo] failed to mark scan {scan['id']} as failed: {exc}")
 
 
 def _run(scan_id: int) -> None:
@@ -149,6 +180,9 @@ def _run(scan_id: int) -> None:
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
 
+    # Последняя строка журнала -- до смены статуса: страница скана перестаёт
+    # опрашивать журнал, как только видит completed.
+    _log(scan_id, "Анализ кода завершён", level="success", phase="Завершено")
     control_client.patch_scan(
         scan_id,
         {
@@ -159,4 +193,3 @@ def _run(scan_id: int) -> None:
             "finished_at": _now(),
         },
     )
-    _log(scan_id, "Анализ кода завершён", level="success", phase="Завершено")

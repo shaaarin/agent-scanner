@@ -39,7 +39,8 @@ export function Scans() {
   const [selectedAttacks, setSelectedAttacks] = useState<string[]>([]);
   const [minSeverity, setMinSeverity] = useState<CodeScanSeverity>("medium");
   const [guidance, setGuidance] = useState("");
-  const [startError, setStartError] = useState<string | null>(null);
+  const [pageError, setPageError] = useState<string | null>(null);
+  const [createError, setCreateError] = useState<string | null>(null);
 
   // Модель-судья нужна только динамическому тестированию (DeepTeam).
   const needsLlmModel = newScanType === "deep_team";
@@ -75,6 +76,7 @@ export function Scans() {
       config.guidance = guidance.trim() || null;
     }
 
+    setCreateError(null);
     try {
       await api.post("/scans", {
         name: newScanName,
@@ -95,26 +97,29 @@ export function Scans() {
       api.get<Scan[]>("/scans").then(setScans);
     } catch (error) {
       console.error("Failed to create scan:", error);
+      setCreateError(error instanceof Error ? error.message : String(error));
     }
   };
 
   const handleStartScan = async (scanId: number) => {
-    setStartError(null);
+    setPageError(null);
     try {
       await api.post(`/scans/${scanId}/start`, {});
       navigate(`/scans/${scanId}`);
     } catch (error) {
       console.error("Failed to start scan:", error);
-      setStartError(error instanceof Error ? error.message : String(error));
+      setPageError(`Не удалось запустить сканирование: ${error instanceof Error ? error.message : String(error)}`);
     }
   };
 
   const handleDeleteScan = async (scanId: number) => {
+    setPageError(null);
     try {
       await api.delete(`/scans/${scanId}`);
       api.get<Scan[]>("/scans").then(setScans);
     } catch (error) {
       console.error("Failed to delete scan:", error);
+      setPageError(`Не удалось удалить сканирование: ${error instanceof Error ? error.message : String(error)}`);
     }
   };
 
@@ -149,9 +154,9 @@ export function Scans() {
         }
       />
 
-      {startError && (
+      {pageError && (
         <div className="card" style={{ padding: "1rem 1.5rem", marginBottom: "1rem", borderLeft: "0.3rem solid var(--danger)" }}>
-          <span style={{ color: "var(--danger)" }}>Не удалось запустить сканирование: {startError}</span>
+          <span style={{ color: "var(--danger)" }}>{pageError}</span>
         </div>
       )}
 
@@ -408,6 +413,9 @@ export function Scans() {
               </>
             )}
             
+            {createError && (
+              <p style={{ color: "var(--danger)", margin: "0 0 1rem" }}>Не удалось создать сканирование: {createError}</p>
+            )}
             <div style={{ display: "flex", gap: "1rem", justifyContent: "flex-end" }}>
               <button className="btn btn-secondary" onClick={() => setShowCreateModal(false)}>
                 Отмена

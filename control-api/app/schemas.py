@@ -49,6 +49,7 @@ class AgentConfigCreate(BaseModel):
     entrypoint: Optional[list[str]] = None
     env_vars: dict[str, str] = {}
     resources: Optional[dict] = None
+    agent_purpose: Optional[str] = None
     interaction_mode: InteractionMode = InteractionMode.NONE
     api_config: Optional[dict] = None
     langgraph_config: Optional[dict] = None
@@ -65,6 +66,7 @@ class AgentConfigUpdate(BaseModel):
     entrypoint: Optional[list[str]] = None
     env_vars: Optional[dict[str, str]] = None
     resources: Optional[dict] = None
+    agent_purpose: Optional[str] = None
     interaction_mode: Optional[InteractionMode] = None
     api_config: Optional[dict] = None
     langgraph_config: Optional[dict] = None

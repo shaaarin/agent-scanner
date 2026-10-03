@@ -15,6 +15,11 @@ app.add_middleware(
 )
 
 
+@app.on_event("startup")
+async def fail_interrupted_scans() -> None:
+    await asyncio.to_thread(runner.fail_interrupted_scans)
+
+
 @app.get("/health")
 def health():
     return {"status": "ok"}

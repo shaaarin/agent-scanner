@@ -60,6 +60,7 @@ export interface AgentConfig {
   entrypoint: string[] | null;
   env_vars: Record<string, string>;
   resources: Record<string, string> | null;
+  agent_purpose: string | null;
   interaction_mode: InteractionMode;
   api_config: Record<string, unknown> | null;
   langgraph_config: Record<string, unknown> | null;

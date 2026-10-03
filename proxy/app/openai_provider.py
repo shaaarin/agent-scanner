@@ -51,14 +51,19 @@ class StreamAccumulator:
         return {"choices": [{"message": message}]}
 
 
-def parse_sse_lines(raw_chunk: bytes, buffer: str) -> tuple[list[dict], str]:
+def parse_sse_lines(raw_chunk: bytes, buffer: bytes) -> tuple[list[dict], bytes]:
     """Splits a raw SSE byte chunk (appended to `buffer`) into complete
-    `data: {...}` JSON events, returning (events, remaining_buffer)."""
-    buffer += raw_chunk.decode("utf-8", errors="ignore")
+    `data: {...}` JSON events, returning (events, remaining_buffer).
+
+    The buffer stays bytes and only whole frames are decoded: the network
+    splits chunks at arbitrary bytes, and decoding each chunk on its own
+    dropped multi-byte UTF-8 characters cut in half (Cyrillic text lost
+    letters). A frame boundary is never inside a UTF-8 character."""
+    buffer += raw_chunk
     events: list[dict] = []
-    while "\n\n" in buffer:
-        frame, buffer = buffer.split("\n\n", 1)
-        for line in frame.splitlines():
+    while b"\n\n" in buffer:
+        frame, buffer = buffer.split(b"\n\n", 1)
+        for line in frame.decode("utf-8", errors="replace").splitlines():
             if not line.startswith("data:"):
                 continue
             data = line[len("data:"):].strip()

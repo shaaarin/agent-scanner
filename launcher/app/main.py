@@ -60,24 +60,32 @@ def repo_inspect_route(req: RepoInspectRequest):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-def _patch_reachable_url(agent_config: dict, address: str) -> None:
+def _patch_reachable_url(agent_config: dict, address: str) -> dict:
     """After the agent's Pod+Service exist, points AgentConfig.api_config.url
     or .langgraph_config.base_url at the real, interactor-reachable address
     (replacing scheme/host/port only -- api_config.url's own path, if any,
     is preserved). No-op for cli/none modes, which don't need a network
     address at all.
+
+    Returns the patched fields: /launch hands them to the scanner, because
+    the AgentConfig row is shared and a concurrent scan of the same agent
+    overwrites the address with its own Pod's.
     """
     mode = agent_config.get("interaction_mode")
+    patch: dict = {}
     if mode == "langgraph":
         langgraph_config = dict(agent_config.get("langgraph_config") or {})
         langgraph_config["base_url"] = address
-        control_client.update_agent_config(agent_config["id"], {"langgraph_config": langgraph_config})
+        patch = {"langgraph_config": langgraph_config}
     elif mode == "api":
         api_config = dict(agent_config.get("api_config") or {})
         existing = urlparse(api_config.get("url") or "")
         new_host = urlparse(address)
         api_config["url"] = urlunparse(new_host._replace(path=existing.path, query=existing.query))
-        control_client.update_agent_config(agent_config["id"], {"api_config": api_config})
+        patch = {"api_config": api_config}
+    if patch:
+        control_client.update_agent_config(agent_config["id"], patch)
+    return patch
 
 
 @app.post("/launch")
@@ -117,10 +125,11 @@ def launch(req: LaunchRequest):
     pod_name = pod_manager.launch_pod(namespace, agent_config, scan["session_id"], image)
     node_port = pod_manager.ensure_agent_service(namespace, agent_config)
 
+    agent_config_patch: dict = {}
     if node_port:
         node = pod_manager.node_address()
         if node:
-            _patch_reachable_url(agent_config, f"http://{node}:{node_port}")
+            agent_config_patch = _patch_reachable_url(agent_config, f"http://{node}:{node_port}")
 
     control_client.update_scan(
         req.scan_id,
@@ -137,6 +146,7 @@ def launch(req: LaunchRequest):
         "build_job_name": job_name,
         "built_image": image,
         "node_port": node_port,
+        "agent_config_patch": agent_config_patch,
         "status": pod_manager.pod_status(namespace, pod_name),
     }
 

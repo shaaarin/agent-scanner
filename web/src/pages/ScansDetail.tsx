@@ -7,6 +7,20 @@ import { PageHeader } from "../components/PageHeader";
 import { CodeScanResults } from "../components/CodeScanResults";
 
 const TERMINAL_STATUSES = ["completed", "failed"];
+const LOG_PAGE_SIZE = 500;
+
+// Журнал отдаётся страницами (не больше LOG_PAGE_SIZE строк за запрос) --
+// дочитываем до конца, иначе у длинного завершённого скана не видно хвоста.
+async function fetchLogsAfter(scanId: string, afterId: number): Promise<ScanLog[]> {
+  const all: ScanLog[] = [];
+  let cursor = afterId;
+  for (;;) {
+    const page = await api.get<ScanLog[]>(`/scans/${scanId}/logs?after_id=${cursor}&limit=${LOG_PAGE_SIZE}`);
+    all.push(...page);
+    if (page.length < LOG_PAGE_SIZE) return all;
+    cursor = page[page.length - 1].id;
+  }
+}
 
 export function ScansDetail() {
   const { id } = useParams<{ id: string }>();
@@ -16,17 +30,27 @@ export function ScansDetail() {
   const [results, setResults] = useState<ScanResults | null>(null);
   const [logs, setLogs] = useState<ScanLog[]>([]);
   const [starting, setStarting] = useState(false);
+  const [startError, setStartError] = useState<string | null>(null);
   const logEndRef = useRef<HTMLDivElement | null>(null);
   const lastLogIdRef = useRef(0);
+
+  // Первая загрузка и опрос могут вернуть одни и те же строки -- добавляем
+  // только те, что новее уже показанных.
+  const appendLogs = (fresh: ScanLog[]) => {
+    if (!fresh.length) return;
+    lastLogIdRef.current = Math.max(lastLogIdRef.current, fresh[fresh.length - 1].id);
+    setLogs((prev) => {
+      const lastShown = prev.length ? prev[prev.length - 1].id : 0;
+      const added = fresh.filter((log) => log.id > lastShown);
+      return added.length ? [...prev, ...added] : prev;
+    });
+  };
 
   useEffect(() => {
     if (!id) return;
     api.get<Scan>(`/scans/${id}`).then(setScan);
     api.get<AgentConfig>(`/scans/${id}/agent-config`).then(setAgentConfig).catch(() => {});
-    api.get<ScanLog[]>(`/scans/${id}/logs`).then((initial) => {
-      setLogs(initial);
-      lastLogIdRef.current = initial.length ? initial[initial.length - 1].id : 0;
-    });
+    fetchLogsAfter(id, 0).then(appendLogs).catch((error) => console.error("Failed to load logs:", error));
   }, [id]);
 
   useEffect(() => {
@@ -45,11 +69,7 @@ export function ScansDetail() {
       try {
         const fresh = await api.get<Scan>(`/scans/${id}`);
         setScan(fresh);
-        const freshLogs = await api.get<ScanLog[]>(`/scans/${id}/logs?after_id=${lastLogIdRef.current}`);
-        if (freshLogs.length) {
-          lastLogIdRef.current = freshLogs[freshLogs.length - 1].id;
-          setLogs((prev) => [...prev, ...freshLogs]);
-        }
+        appendLogs(await fetchLogsAfter(id, lastLogIdRef.current));
       } catch (error) {
         console.error("Failed to poll scan:", error);
       }
@@ -64,11 +84,13 @@ export function ScansDetail() {
   const handleStart = async () => {
     if (!id) return;
     setStarting(true);
+    setStartError(null);
     try {
       const fresh = await api.post<Scan>(`/scans/${id}/start`, {});
       setScan(fresh);
     } catch (error) {
       console.error("Failed to start scan:", error);
+      setStartError(error instanceof Error ? error.message : String(error));
     } finally {
       setStarting(false);
     }
@@ -135,6 +157,12 @@ export function ScansDetail() {
           </div>
         }
       />
+
+      {startError && (
+        <div className="card" style={{ padding: "1rem 1.5rem", marginBottom: "1rem", borderLeft: "0.3rem solid var(--danger)" }}>
+          <span style={{ color: "var(--danger)" }}>Не удалось запустить сканирование: {startError}</span>
+        </div>
+      )}
 
       <div className="card" style={{ marginBottom: "2rem" }}>
         <h3 style={{ marginBottom: "1rem" }}>Общие сведения</h3>

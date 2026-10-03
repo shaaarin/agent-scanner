@@ -191,6 +191,7 @@ export function AgentConfigs() {
     setEntrypoint(c.entrypoint ? c.entrypoint.join(" ") : "");
     setCpu((c.resources?.cpu as string) ?? "");
     setMemory((c.resources?.memory as string) ?? "");
+    setAgentPurpose(c.agent_purpose ?? "");
     const rows = Object.entries(c.env_vars).map(([key, value]) => ({ key, value }));
     setEnvRows(rows.length ? rows : emptyEnv);
     setInteractionMode(c.interaction_mode);
@@ -298,7 +299,7 @@ export function AgentConfigs() {
         git_repo_url: gitRepoUrl,
         git_ref: defaultBranch,
         git_access_token: gitAccessToken || null,
-        agent_purpose: agentPurpose || null,
+        agent_purpose: agentPurpose.trim() || null,
       };
       if (draftId) {
         await api.put(`/agent-configs/${draftId}`, draftFields);
@@ -369,6 +370,7 @@ export function AgentConfigs() {
       entrypoint: entrypoint ? entrypoint.split(" ").filter(Boolean) : null,
       env_vars,
       resources,
+      agent_purpose: agentPurpose.trim() || null,
       interaction_mode: interactionMode,
       api_config,
       langgraph_config:
@@ -394,7 +396,12 @@ export function AgentConfigs() {
   }
 
   async function handleDelete(id: number) {
-    await api.delete(`/agent-configs/${id}`);
+    setError(null);
+    try {
+      await api.delete(`/agent-configs/${id}`);
+    } catch (e) {
+      setError(String(e));
+    }
     load();
   }
 
