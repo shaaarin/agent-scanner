@@ -100,7 +100,8 @@ Agent Scanner проверяет LLM-агентов с вызовом инстр
    - **Запуск агента** — `POST launcher/launch {scan_id}` (сборка может
      занять минуты);
    - **Ожидание агента** — опрашивает `launcher/status/{scan_id}` до
-     `Running`, затем ждёт ответа HTTP-поверхности агента;
+     `Running`, затем ждёт ответа HTTP-поверхности агента (LangGraph — `/ok`,
+     REST API — `api_config.health_path`, по умолчанию путь эндпоинта без `/chat` + `/ok`);
    - **Тестирование** — запускает DeepTeam, стримя его вывод в журнал;
    - **Сохранение результатов** — пишет результаты и переводит скан в
      `completed`.
@@ -176,7 +177,14 @@ Agent Scanner проверяет LLM-агентов с вызовом инстр
   защита от повторного запуска.
 - `target.py` — `model_callback` для DeepTeam: переводит каждый
   сгенерированный DeepTeam запрос в свежий диалог с тестируемым агентом
-  (REST `api` или LangGraph `langgraph`), синхронно.
+  (REST `api` или LangGraph `langgraph`), синхронно. Режим `api` — любой
+  HTTP API по `api_config`: метод, URL, заголовки, тело `json`/`form`/`text`
+  с плейсхолдерами `{{message}}` и `{{session_id}}`, путь к ответу в JSON
+  (`response_field`, с отрицательными индексами), путь проверки готовности
+  (`health_path`). Нет поля ответа или ошибка HTTP — ошибка кейса.
+  Подстановка — в один проход: плейсхолдер внутри текста атаки не
+  раскрывается.
+  Описание полей — `docs/running-locally.md`, раздел «Режим REST API».
 - `deepteam_runner.py` — сопоставляет имена уязвимостей и атак из UI с
   классами DeepTeam (есть синонимы, например
   `AgentIdentityTrustAbuse` → `AgentIdentityAbuse`), запускает `red_team`,

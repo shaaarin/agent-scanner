@@ -15,6 +15,7 @@ import os
 import time
 from collections import Counter
 from datetime import datetime, timezone
+from urllib.parse import urlparse, urlunparse
 
 import httpx
 
@@ -96,13 +97,32 @@ def _wait_pod_ready(scan_id: int) -> None:
     raise RuntimeError("агент не перешёл в Running за отведённое время")
 
 
-def _wait_http_ready(scan_id: int, address: str) -> None:
+def _probe_url(agent_config: dict, address: str) -> str:
+    """Адрес проверки готовности.
+
+    LangGraph -- его `/ok`. REST API -- схема, хост и порт из адреса агента и
+    путь: `api_config.health_path`, если задан; иначе прежнее правило --
+    путь эндпоинта без "/chat" + "/ok"; если в пути есть плейсхолдер
+    (`/ask/{{message}}`), то "/" -- стучаться в шаблонный путь нельзя."""
+    if agent_config.get("interaction_mode") == "langgraph":
+        return address.rstrip("/") + "/ok"
+    parsed = urlparse(address)
+    health_path = (agent_config.get("api_config") or {}).get("health_path")
+    if health_path:
+        path = health_path if health_path.startswith("/") else "/" + health_path
+    elif "{{" in parsed.path:
+        path = "/"
+    else:
+        base = parsed.path.rstrip("/")
+        if base.endswith("/chat"):
+            base = base[: -len("/chat")]
+        path = base + "/ok"
+    return urlunparse(parsed._replace(path=path, params="", query="", fragment=""))
+
+
+def _wait_http_ready(scan_id: int, probe: str) -> None:
     """The Pod can be Running before the app inside is listening -- poll its
     HTTP surface until it answers (any status below 500 counts)."""
-    base = address.rstrip("/")
-    if base.endswith("/chat"):
-        base = base[: -len("/chat")]
-    probe = base + "/ok"
     deadline = time.monotonic() + _HTTP_READY_TIMEOUT
     with httpx.Client(timeout=5.0) as client:
         while time.monotonic() < deadline:
@@ -183,7 +203,7 @@ def _run(scan_id: int) -> None:
             "у агента нет reachable-адреса (задайте api_port в конфиге агента, чтобы launcher пробросил NodePort)"
         )
     _log(scan_id, f"Адрес агента: {address}", phase="Ожидание агента")
-    _wait_http_ready(scan_id, address)
+    _wait_http_ready(scan_id, _probe_url(agent_config, address))
 
     _set_phase(scan_id, "Тестирование")
     _log(scan_id, "Запуск DeepTeam red teaming...", phase="Тестирование")

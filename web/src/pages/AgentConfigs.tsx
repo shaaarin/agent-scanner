@@ -16,6 +16,57 @@ interface RepoInspectResponse {
 
 const emptyEnv: EnvRow[] = [{ key: "", value: "" }];
 const DEFAULT_REQUEST_BODY_TEMPLATE = '{\n  "message": "{{message}}"\n}';
+const DEFAULT_TEXT_BODY_TEMPLATE = "{{message}}";
+const PREVIEW_MESSAGE = 'Привет! Покажи "статус" заказа';
+const PREVIEW_SESSION_ID = "1b9d6bcd-bbfd-4b2d-9b5d-ab8dfbbd4bed";
+
+type BodyFormat = "json" | "form" | "text";
+
+// Та же подстановка, что в scanner/deepteam/app/target.py::render_request --
+// только для предпросмотра в форме.
+function fillPlaceholders(text: string, urlEncode = false): string {
+  const enc = (v: string) => (urlEncode ? encodeURIComponent(v) : v);
+  return text.split("{{message}}").join(enc(PREVIEW_MESSAGE)).split("{{session_id}}").join(enc(PREVIEW_SESSION_ID));
+}
+
+function substituteJson(node: unknown): unknown {
+  if (typeof node === "string") return fillPlaceholders(node);
+  if (Array.isArray(node)) return node.map(substituteJson);
+  if (node && typeof node === "object") {
+    return Object.fromEntries(Object.entries(node as Record<string, unknown>).map(([k, v]) => [k, substituteJson(v)]));
+  }
+  return node;
+}
+
+function renderRequestPreview(
+  url: string,
+  method: string,
+  bodyFormat: BodyFormat,
+  template: string,
+  headers: EnvRow[],
+): string {
+  const lines = [`${method} ${fillPlaceholders(url || "/", true)}`];
+  const hdrs = headers.filter((h) => h.key).map((h) => `${h.key}: ${fillPlaceholders(h.value)}`);
+  try {
+    if (bodyFormat === "text") {
+      if (!hdrs.some((h) => h.toLowerCase().startsWith("content-type:"))) hdrs.push("Content-Type: text/plain; charset=utf-8");
+      return [...lines, ...hdrs, "", fillPlaceholders(template)].join("\n");
+    }
+    const parsed = template.trim() ? JSON.parse(template) : null;
+    const body = substituteJson(parsed);
+    if (method === "GET") {
+      const query = body && typeof body === "object" ? new URLSearchParams(body as Record<string, string>).toString() : "";
+      return [query ? `${lines[0]}${lines[0].includes("?") ? "&" : "?"}${query}` : lines[0], ...hdrs].join("\n");
+    }
+    if (bodyFormat === "form") {
+      const form = new URLSearchParams(Object.entries((body ?? {}) as Record<string, unknown>).map(([k, v]) => [k, String(v)])).toString();
+      return [...lines, ...hdrs, "Content-Type: application/x-www-form-urlencoded", "", form].join("\n");
+    }
+    return [...lines, ...hdrs, "Content-Type: application/json", "", JSON.stringify(body, null, 2)].join("\n");
+  } catch {
+    return "Шаблон тела — некорректный JSON";
+  }
+}
 
 const interactionModeLabel: Record<string, string> = {
   none: "Без диалога",
@@ -77,6 +128,9 @@ export function AgentConfigs() {
   const [apiMethod, setApiMethod] = useState("POST");
   const [requestBodyTemplate, setRequestBodyTemplate] = useState(DEFAULT_REQUEST_BODY_TEMPLATE);
   const [responseField, setResponseField] = useState("reply");
+  const [bodyFormat, setBodyFormat] = useState<BodyFormat>("json");
+  const [apiHeaders, setApiHeaders] = useState<EnvRow[]>(emptyEnv);
+  const [healthPath, setHealthPath] = useState("");
 
   const [langgraphBaseUrl, setLanggraphBaseUrl] = useState("");
   const [langgraphAssistantId, setLanggraphAssistantId] = useState("agent");
@@ -111,6 +165,9 @@ export function AgentConfigs() {
     setApiMethod("POST");
     setRequestBodyTemplate(DEFAULT_REQUEST_BODY_TEMPLATE);
     setResponseField("reply");
+    setBodyFormat("json");
+    setApiHeaders(emptyEnv);
+    setHealthPath("");
     setLanggraphBaseUrl("");
     setLanggraphAssistantId("agent");
     setLanggraphApiKey("");
@@ -140,8 +197,19 @@ export function AgentConfigs() {
     const apiConfig = c.api_config as Record<string, unknown> | null;
     setApiUrl((apiConfig?.url as string) ?? "");
     setApiMethod((apiConfig?.method as string) ?? "POST");
-    setRequestBodyTemplate(apiConfig?.request_body_template ? JSON.stringify(apiConfig.request_body_template, null, 2) : DEFAULT_REQUEST_BODY_TEMPLATE);
+    const storedTemplate = apiConfig?.request_body_template;
+    setRequestBodyTemplate(
+      storedTemplate === undefined || storedTemplate === null
+        ? DEFAULT_REQUEST_BODY_TEMPLATE
+        : typeof storedTemplate === "string"
+        ? storedTemplate
+        : JSON.stringify(storedTemplate, null, 2),
+    );
     setResponseField((apiConfig?.response_field as string) ?? "reply");
+    setBodyFormat(((apiConfig?.body_format as BodyFormat) ?? "json"));
+    const storedHeaders = Object.entries((apiConfig?.headers as Record<string, string>) ?? {}).map(([key, value]) => ({ key, value }));
+    setApiHeaders(storedHeaders.length ? storedHeaders : emptyEnv);
+    setHealthPath((apiConfig?.health_path as string) ?? "");
     const langgraphConfig = c.langgraph_config as Record<string, unknown> | null;
     setLanggraphBaseUrl((langgraphConfig?.base_url as string) ?? "");
     setLanggraphAssistantId((langgraphConfig?.assistant_id as string) ?? "agent");
@@ -265,17 +333,29 @@ export function AgentConfigs() {
 
     let api_config = null;
     if (interactionMode === "api") {
-      try {
-        api_config = {
-          url: apiUrl,
-          method: apiMethod,
-          request_body_template: JSON.parse(requestBodyTemplate),
-          response_field: responseField,
-        };
-      } catch {
-        setError("Проверьте шаблон тела запроса: нужен корректный JSON.");
-        return;
+      let request_body_template: unknown = requestBodyTemplate;
+      if (bodyFormat !== "text") {
+        try {
+          request_body_template = requestBodyTemplate.trim() ? JSON.parse(requestBodyTemplate) : null;
+        } catch {
+          setError("Проверьте шаблон тела запроса: для форматов JSON и form нужен корректный JSON.");
+          return;
+        }
+        if (bodyFormat === "form" && (request_body_template === null || typeof request_body_template !== "object" || Array.isArray(request_body_template))) {
+          setError("Для формата form шаблон тела должен быть JSON-объектом {\"поле\": \"значение\"}.");
+          return;
+        }
       }
+      const headers = Object.fromEntries(apiHeaders.filter((h) => h.key.trim()).map((h) => [h.key.trim(), h.value]));
+      api_config = {
+        url: apiUrl,
+        method: apiMethod,
+        body_format: bodyFormat,
+        request_body_template,
+        headers,
+        response_field: responseField,
+        ...(healthPath.trim() && { health_path: healthPath.trim() }),
+      };
     }
 
     const payload = {
@@ -354,7 +434,13 @@ export function AgentConfigs() {
 
         {interactionMode === "api" && (
           <>
-            <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: "1.6rem" }}>
+            <p style={{ fontSize: 12, color: "var(--text-500)", margin: "0 0 1.2rem" }}>
+              Любой HTTP API агента. Плейсхолдеры: <code>{"{{message}}"}</code> — сообщение атаки,{" "}
+              <code>{"{{session_id}}"}</code> — новый id на каждый разговор. Их можно ставить в путь и
+              параметры URL, заголовки и тело. Если задан «Порт API», хост и порт в URL платформа
+              подставит сама — достаточно пути, например <code>/chat</code>.
+            </p>
+            <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr", gap: "1.6rem" }}>
               <div className="field">
                 <label>URL эндпоинта агента</label>
                 <input value={apiUrl} onChange={(e) => setApiUrl(e.target.value)} placeholder="/chat" />
@@ -364,16 +450,88 @@ export function AgentConfigs() {
                 <select value={apiMethod} onChange={(e) => setApiMethod(e.target.value)}>
                   <option value="POST">POST</option>
                   <option value="GET">GET</option>
+                  <option value="PUT">PUT</option>
+                  <option value="PATCH">PATCH</option>
+                </select>
+              </div>
+              <div className="field">
+                <label>Формат тела</label>
+                <select
+                  value={bodyFormat}
+                  onChange={(e) => {
+                    const next = e.target.value as BodyFormat;
+                    if (next === "text" && requestBodyTemplate === DEFAULT_REQUEST_BODY_TEMPLATE) setRequestBodyTemplate(DEFAULT_TEXT_BODY_TEMPLATE);
+                    if (next !== "text" && requestBodyTemplate === DEFAULT_TEXT_BODY_TEMPLATE) setRequestBodyTemplate(DEFAULT_REQUEST_BODY_TEMPLATE);
+                    setBodyFormat(next);
+                  }}
+                >
+                  <option value="json">JSON</option>
+                  <option value="form">Форма (x-www-form-urlencoded)</option>
+                  <option value="text">Текст</option>
                 </select>
               </div>
             </div>
             <div className="field">
-              <label>Шаблон тела запроса · {"{{message}}"} подставится в сообщение</label>
-              <textarea rows={3} style={{ fontFamily: "monospace" }} value={requestBodyTemplate} onChange={(e) => setRequestBodyTemplate(e.target.value)} />
+              <label>
+                Шаблон тела запроса
+                {bodyFormat === "text" ? " · произвольный текст" : " · JSON, плейсхолдеры внутри строк"}
+                {apiMethod === "GET" && bodyFormat !== "text" ? " · для GET поля уйдут в параметры URL" : ""}
+              </label>
+              <textarea rows={5} style={{ fontFamily: "monospace" }} value={requestBodyTemplate} onChange={(e) => setRequestBodyTemplate(e.target.value)} />
             </div>
             <div className="field">
-              <label>Поле ответа (dot-path в JSON, например "reply" или "data.0.text")</label>
-              <input value={responseField} onChange={(e) => setResponseField(e.target.value)} placeholder="reply" />
+              <label>Заголовки · необязательно</label>
+              {apiHeaders.map((row, i) => (
+                <div key={i} style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+                  <input
+                    placeholder="Authorization"
+                    value={row.key}
+                    onChange={(e) => setApiHeaders((rows) => rows.map((r, idx) => (idx === i ? { ...r, key: e.target.value } : r)))}
+                  />
+                  <input
+                    placeholder="Bearer ..."
+                    value={row.value}
+                    onChange={(e) => setApiHeaders((rows) => rows.map((r, idx) => (idx === i ? { ...r, value: e.target.value } : r)))}
+                  />
+                </div>
+              ))}
+              <button type="button" className="btn btn-secondary" onClick={() => setApiHeaders((r) => [...r, { key: "", value: "" }])}>
+                + Добавить заголовок
+              </button>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: "1.6rem" }}>
+              <div className="field">
+                <label>Поле ответа · путь в JSON</label>
+                <input value={responseField} onChange={(e) => setResponseField(e.target.value)} placeholder="reply" />
+                <p style={{ fontSize: 12, color: "var(--text-500)", margin: "0.4rem 0 0" }}>
+                  Например <code>reply</code>, <code>data.0.text</code>, <code>messages.-1.content</code> (−1 — последний
+                  элемент). Пусто — весь ответ как текст. Если поля нет, кейс считается ошибкой.
+                </p>
+              </div>
+              <div className="field">
+                <label>Путь проверки готовности</label>
+                <input value={healthPath} onChange={(e) => setHealthPath(e.target.value)} placeholder="как раньше: …/ok" />
+                <p style={{ fontSize: 12, color: "var(--text-500)", margin: "0.4rem 0 0" }}>
+                  Агент готов, когда этот путь отвечает кодом ниже 500. Пусто — путь эндпоинта без <code>/chat</code> +{" "}
+                  <code>/ok</code>, а если в пути есть плейсхолдер — <code>/</code>.
+                </p>
+              </div>
+            </div>
+            <div className="field">
+              <label>Пример запроса · с сообщением «{PREVIEW_MESSAGE}»</label>
+              <pre
+                style={{
+                  margin: 0,
+                  padding: "1rem",
+                  background: "var(--background-generic)",
+                  borderRadius: "var(--radius-m)",
+                  fontSize: 12,
+                  whiteSpace: "pre-wrap",
+                  wordBreak: "break-all",
+                }}
+              >
+                {renderRequestPreview(apiUrl, apiMethod, bodyFormat, requestBodyTemplate, apiHeaders)}
+              </pre>
             </div>
           </>
         )}
