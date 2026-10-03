@@ -7,6 +7,7 @@ embedded into the clone URL by app/git_auth.py) without touching the
 Kaniko step.
 """
 import os
+import shlex
 import time
 
 from kubernetes import client as k8s
@@ -45,9 +46,10 @@ def _build_job_manifest(job_name: str, namespace: str, agent_config: dict) -> k8
         name="clone",
         image=GIT_CLONE_IMAGE,
         command=["sh", "-c"],
+        # Ветка и адрес -- из AgentConfig, в shell-команду только через quote.
         args=[
-            f"git clone --branch {agent_config['git_ref']} --depth 1 "
-            f"{clone_url} /workspace/src"
+            f"git clone --branch {shlex.quote(agent_config['git_ref'])} --depth 1 "
+            f"{shlex.quote(clone_url)} /workspace/src"
         ],
         volume_mounts=[k8s.V1VolumeMount(name="workspace", mount_path="/workspace")],
     )

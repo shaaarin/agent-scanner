@@ -12,6 +12,7 @@ promptfoo сканирует только изменения между двум
 дочитывающий файлы через filesystem-MCP, видит тот же код.
 """
 import os
+import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -78,6 +79,11 @@ def clone(git_repo_url: str, git_ref: str, access_token: str | None, dest: Path)
         lines = [line for line in result.stderr.splitlines() if line.strip() and not line.startswith("Cloning into")]
         stderr = scrub("\n".join(lines), clone_url, git_repo_url)
         raise RepoError(f"не удалось клонировать {git_repo_url} (ветка {git_ref}): {stderr[:500]}")
+    if clone_url != git_repo_url:
+        # git сохраняет адрес клона с токеном в .git/config и в reflog, а
+        # каталог клона целиком читает облако Promptfoo через filesystem-MCP.
+        _git(["remote", "set-url", "origin", git_repo_url], dest)
+        shutil.rmtree(dest / ".git" / "logs", ignore_errors=True)
 
 
 def prepare(path: Path) -> PreparedRepo:

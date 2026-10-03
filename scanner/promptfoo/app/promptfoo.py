@@ -11,6 +11,7 @@
 """
 import json
 import os
+import signal
 import subprocess
 import threading
 import time
@@ -78,6 +79,9 @@ def run_code_scan(
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        # своя группа процессов: при таймауте останавливаем и дочерний
+        # filesystem-MCP, иначе он остаётся висеть в контейнере
+        start_new_session=True,
     )
 
     stdout_chunks: list[str] = []
@@ -107,7 +111,7 @@ def run_code_scan(
         except subprocess.TimeoutExpired:
             elapsed = time.monotonic() - started
             if elapsed >= SCAN_TIMEOUT:
-                proc.kill()
+                os.killpg(proc.pid, signal.SIGKILL)
                 proc.wait()
                 raise PromptfooError(f"анализ не уложился в {int(SCAN_TIMEOUT // 60)} мин и был остановлен")
             on_log("info", f"Анализ идёт, прошло {int(elapsed // 60)} мин {int(elapsed % 60)} с")

@@ -85,7 +85,13 @@ def ensure_ca_secret() -> None:
         metadata=k8s.V1ObjectMeta(name=CA_SECRET_NAME, namespace=CA_SYSTEM_NAMESPACE),
         string_data={"ca.crt": cert_pem.decode(), "ca.key": key_pem.decode()},
     )
-    core.create_namespaced_secret(CA_SYSTEM_NAMESPACE, secret)
+    try:
+        core.create_namespaced_secret(CA_SYSTEM_NAMESPACE, secret)
+    except ApiException as exc:
+        # Два первых /launch на чистом кластере одновременно: секрет уже
+        # создал параллельный запрос -- используем его CA.
+        if exc.status != 409:
+            raise
 
 
 def ensure_ca_secret_in_namespace(namespace: str) -> None:

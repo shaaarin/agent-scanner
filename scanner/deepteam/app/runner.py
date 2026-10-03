@@ -9,12 +9,16 @@
 
 Every step writes a `ScanLog` line (and the current phase) so the scan detail
 page can follow along. Any failure is logged and marks the scan failed.
+Once the agent answers, its namespace is deleted (launcher `/stop`) when the
+scan ends either way; if the agent never came up, the namespace is kept for
+`kubectl logs`.
 """
 import json
 import os
 import time
 from collections import Counter
 from datetime import datetime, timezone
+from urllib.parse import urlparse, urlunparse
 
 import httpx
 
@@ -25,6 +29,8 @@ LAUNCHER_URL = os.environ.get("LAUNCHER_URL", "http://launcher:8000")
 _BUILD_TIMEOUT = float(os.environ.get("SCAN_BUILD_TIMEOUT", "900"))
 _POD_READY_TIMEOUT = float(os.environ.get("SCAN_POD_READY_TIMEOUT", "300"))
 _HTTP_READY_TIMEOUT = float(os.environ.get("SCAN_HTTP_READY_TIMEOUT", "120"))
+
+SCAN_TYPE = "deep_team"
 
 _running: set[int] = set()
 
@@ -78,7 +84,8 @@ def _target_address(agent_config: dict) -> str | None:
     return None
 
 
-def _wait_pod_ready(scan_id: int) -> None:
+def _wait_pod_ready(scan_id: int, namespace: str) -> None:
+    hint = f"; диагностика: kubectl get pods -n {namespace}, kubectl logs -n {namespace} <под> -c agent"
     deadline = time.monotonic() + _POD_READY_TIMEOUT
     last = None
     with httpx.Client(timeout=15.0) as client:
@@ -91,18 +98,37 @@ def _wait_pod_ready(scan_id: int) -> None:
             if current == "Running":
                 return
             if current in ("Failed", "Succeeded"):
-                raise RuntimeError(f"под агента завершился со статусом {current}")
+                raise RuntimeError(f"под агента завершился со статусом {current}{hint}")
             time.sleep(3)
-    raise RuntimeError("агент не перешёл в Running за отведённое время")
+    raise RuntimeError(f"агент не перешёл в Running за отведённое время{hint}")
 
 
-def _wait_http_ready(scan_id: int, address: str) -> None:
+def _probe_url(agent_config: dict, address: str) -> str:
+    """Адрес проверки готовности.
+
+    LangGraph -- его `/ok`. REST API -- схема, хост и порт из адреса агента и
+    путь: `api_config.health_path`, если задан; иначе прежнее правило --
+    путь эндпоинта без "/chat" + "/ok"; если в пути есть плейсхолдер
+    (`/ask/{{message}}`), то "/" -- стучаться в шаблонный путь нельзя."""
+    if agent_config.get("interaction_mode") == "langgraph":
+        return address.rstrip("/") + "/ok"
+    parsed = urlparse(address)
+    health_path = (agent_config.get("api_config") or {}).get("health_path")
+    if health_path:
+        path = health_path if health_path.startswith("/") else "/" + health_path
+    elif "{{" in parsed.path:
+        path = "/"
+    else:
+        base = parsed.path.rstrip("/")
+        if base.endswith("/chat"):
+            base = base[: -len("/chat")]
+        path = base + "/ok"
+    return urlunparse(parsed._replace(path=path, params="", query="", fragment=""))
+
+
+def _wait_http_ready(scan_id: int, probe: str) -> None:
     """The Pod can be Running before the app inside is listening -- poll its
     HTTP surface until it answers (any status below 500 counts)."""
-    base = address.rstrip("/")
-    if base.endswith("/chat"):
-        base = base[: -len("/chat")]
-    probe = base + "/ok"
     deadline = time.monotonic() + _HTTP_READY_TIMEOUT
     with httpx.Client(timeout=5.0) as client:
         while time.monotonic() < deadline:
@@ -117,15 +143,29 @@ def _wait_http_ready(scan_id: int, address: str) -> None:
     raise RuntimeError(f"агент не ответил на {probe} за отведённое время")
 
 
+def _stop_agent(scan_id: int) -> None:
+    """Удаляет namespace агента: под с MITM-сайдкаром иначе работает и после
+    скана. Ошибка остановки скан не портит -- только строка в журнале."""
+    try:
+        with httpx.Client(timeout=30.0) as client:
+            client.post(f"{LAUNCHER_URL}/stop/{scan_id}").raise_for_status()
+        _log(scan_id, "Агент остановлен, namespace удалён")
+    except httpx.HTTPError as exc:
+        _log(scan_id, f"Не удалось остановить агента: {exc}", level="error")
+
+
 def run_scan(scan_id: int) -> None:
     if scan_id in _running:
         return
     _running.add(scan_id)
+    launched = [False]
     try:
-        _run(scan_id)
+        _run(scan_id, launched)
     except Exception as exc:  # noqa: BLE001 -- one scan's failure must not kill the thread pool
-        message = str(exc) if isinstance(exc, ScanFailed) else f"{type(exc).__name__}: {exc}"
+        message = str(exc) if isinstance(exc, (ScanFailed, RuntimeError)) else f"{type(exc).__name__}: {exc}"
         payload = {**exc.payload, "error": message} if isinstance(exc, ScanFailed) else {"error": message}
+        if launched[0]:
+            _stop_agent(scan_id)
         _log(scan_id, message, level="error", phase="Ошибка")
         control_client.patch_scan(
             scan_id,
@@ -141,10 +181,53 @@ def run_scan(scan_id: int) -> None:
         _running.discard(scan_id)
 
 
-def _run(scan_id: int) -> None:
+def fail_interrupted_scans() -> None:
+    """При старте сервиса: скан DeepTeam в статусе running, который не
+    выполняется в этом процессе, прервался вместе с прошлым запуском сканера
+    (перезапуск контейнера) и иначе навсегда остался бы «Выполняется»."""
+    try:
+        scans = control_client.list_scans(status="running", scan_type=SCAN_TYPE)
+    except httpx.HTTPError as exc:
+        print(f"[scanner] failed to list running scans: {exc}")
+        return
+    for scan in scans:
+        if scan["id"] in _running:
+            continue
+        message = "Сканирование прервано: сервис scanner-deepteam был перезапущен. Создайте сканирование заново"
+        try:
+            if scan.get("agent_namespace"):
+                _stop_agent(scan["id"])
+            _log(scan["id"], message, level="error", phase="Ошибка")
+            control_client.patch_scan(
+                scan["id"],
+                {
+                    "status": "failed",
+                    "phase": "Ошибка",
+                    "error": message,
+                    "results": json.dumps({"error": message}, ensure_ascii=False),
+                    "finished_at": _now(),
+                },
+            )
+        except httpx.HTTPError as exc:
+            print(f"[scanner] failed to mark scan {scan['id']} as failed: {exc}")
+
+
+def _parse_config(raw) -> dict:
+    if isinstance(raw, dict):
+        return raw
+    try:
+        value = json.loads(raw or "{}")
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"конфиг скана не является JSON: {exc}") from exc
+    return value if isinstance(value, dict) else {}
+
+
+def _run(scan_id: int, launched: list[bool]) -> None:
     _set_phase(scan_id, "Инициализация")
     scan = control_client.get_scan(scan_id)
-    config = json.loads(scan.get("config") or "{}")
+    if scan.get("type") != SCAN_TYPE:
+        raise RuntimeError(f"scanner-deepteam выполняет только сканы типа {SCAN_TYPE}, получен {scan.get('type')}")
+    config = _parse_config(scan.get("config"))
     agent_config = control_client.get_agent_config(scan["agent_config_id"])
 
     vulnerabilities = config.get("vulnerabilities") or ["BFLA", "BOLA", "RBAC"]
@@ -173,17 +256,20 @@ def _run(scan_id: int) -> None:
     )
 
     _set_phase(scan_id, "Ожидание агента")
-    _wait_pod_ready(scan_id)
+    _wait_pod_ready(scan_id, launch.get("namespace") or "<namespace>")
 
-    # launcher may have patched the agent's reachable address into its config.
-    agent_config = control_client.get_agent_config(scan["agent_config_id"])
+    # Адрес агента этого скана -- из ответа launcher, а не из AgentConfig:
+    # конфигурация общая, и параллельный скан того же агента перезапишет в
+    # ней адрес своим подом.
+    agent_config = {**agent_config, **(launch.get("agent_config_patch") or {})}
     address = _target_address(agent_config)
     if not address:
         raise RuntimeError(
             "у агента нет reachable-адреса (задайте api_port в конфиге агента, чтобы launcher пробросил NodePort)"
         )
     _log(scan_id, f"Адрес агента: {address}", phase="Ожидание агента")
-    _wait_http_ready(scan_id, address)
+    _wait_http_ready(scan_id, _probe_url(agent_config, address))
+    launched[0] = True
 
     _set_phase(scan_id, "Тестирование")
     _log(scan_id, "Запуск DeepTeam red teaming...", phase="Тестирование")
@@ -230,6 +316,10 @@ def _run(scan_id: int) -> None:
             phase="Сохранение результатов",
         )
 
+    _stop_agent(scan_id)
+    # Последняя строка журнала -- до смены статуса: страница скана перестаёт
+    # опрашивать журнал, как только видит completed.
+    _log(scan_id, "Сканирование завершено", level="success", phase="Завершено")
     control_client.patch_scan(
         scan_id,
         {
@@ -240,4 +330,3 @@ def _run(scan_id: int) -> None:
             "finished_at": _now(),
         },
     )
-    _log(scan_id, "Сканирование завершено", level="success", phase="Завершено")

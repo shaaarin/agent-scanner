@@ -73,11 +73,15 @@ class AgentConfig(SQLModel, table=True):
     resources: Optional[dict] = Field(
         default=None, sa_column=Column(JSON)
     )  # e.g. {"cpu": "500m", "memory": "512Mi"}
+    # Назначение агента своими словами: DeepTeam строит по нему атаки и
+    # оценивает ответы (purpose / target_purpose).
+    agent_purpose: Optional[str] = Field(default=None, sa_column=Column(Text))
     interaction_mode: InteractionMode = InteractionMode.NONE
-    # api_config (interaction_mode=api): {"url", "method", "request_body_template"
-    #   (arbitrary JSON with a "{{message}}" placeholder), "response_field"
-    #   (dot-path into the JSON response, e.g. "reply" or "data.0.text"),
-    #   "headers" (optional dict)}.
+    # api_config (interaction_mode=api): {"url", "method", "body_format",
+    #   "request_body_template" (with "{{message}}"/"{{session_id}}"
+    #   placeholders), "response_field" (dot-path into the JSON response, e.g.
+    #   "reply" or "messages.-1.content"), "headers", "health_path"} -- see
+    #   scanner/deepteam/app/target.py.
     api_config: Optional[dict] = Field(default=None, sa_column=Column(JSON))
     # langgraph_config (interaction_mode=langgraph): {"base_url", "assistant_id",
     #   "api_key" (optional, sent as X-Api-Key for LangGraph Platform deployments)}.

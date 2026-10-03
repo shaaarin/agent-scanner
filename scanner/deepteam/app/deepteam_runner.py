@@ -3,10 +3,12 @@ checklist names onto DeepTeam classes, streams DeepTeam's own progress output
 into the scan's live log, and maps the returned `RTTestCase`s into the JSON
 shape `ScansDetail.tsx` renders.
 """
-import contextlib
+import inspect
 import io
 import os
 import re
+import sys
+import threading
 from typing import Callable, Optional
 
 from deepeval.models import OpenAIModel
@@ -79,6 +81,49 @@ class _LogStream(io.TextIOBase):
         self._on_line(line)
 
 
+class _ThreadRoutedStream(io.TextIOBase):
+    """sys.stdout/sys.stderr на время работы сервиса: пишет в поток журнала
+    того скана, чей поток сейчас выполняется. `contextlib.redirect_stdout`
+    подменяет вывод всему процессу, и при двух параллельных сканах строки
+    одного попадали в журнал другого. Вывод потоков без скана (например,
+    фоновое обновление прогресс-бара Rich) уходит в исходный stdout."""
+
+    def __init__(self, fallback) -> None:
+        self._fallback = fallback
+        self._local = threading.local()
+
+    def writable(self) -> bool:
+        return True
+
+    def set_target(self, stream: Optional["_LogStream"]) -> None:
+        self._local.stream = stream
+
+    def _target(self):
+        return getattr(self._local, "stream", None) or self._fallback
+
+    def write(self, text: str) -> int:  # type: ignore[override]
+        return self._target().write(text)
+
+    def flush(self) -> None:  # type: ignore[override]
+        self._target().flush()
+
+
+_router_lock = threading.Lock()
+_stdout_router: Optional[_ThreadRoutedStream] = None
+_stderr_router: Optional[_ThreadRoutedStream] = None
+
+
+def _install_routers() -> tuple[_ThreadRoutedStream, _ThreadRoutedStream]:
+    global _stdout_router, _stderr_router
+    with _router_lock:
+        if _stdout_router is None:
+            _stdout_router = _ThreadRoutedStream(sys.stdout)
+            _stderr_router = _ThreadRoutedStream(sys.stderr)
+            sys.stdout = _stdout_router
+            sys.stderr = _stderr_router
+    return _stdout_router, _stderr_router
+
+
 def _resolve_vulnerability(name: str):
     class_name = VULNERABILITY_ALIASES.get(name, name)
     cls = getattr(_vulnerabilities, class_name, None)
@@ -94,6 +139,17 @@ def _resolve_attack(name: str):
     if cls is None:
         raise ValueError(f"неизвестная атака: {name}")
     return cls
+
+
+def _make_attack(name: str, target_information: str):
+    """Часть атак требует описание цели (SyntheticContextInjection --
+    `target_information`); без него конструктор падал с TypeError."""
+    cls = _resolve_attack(name)
+    params = inspect.signature(cls.__init__).parameters
+    kwargs = {}
+    if "target_information" in params:
+        kwargs["target_information"] = target_information
+    return cls(**kwargs)
 
 
 def run_deepteam(
@@ -125,13 +181,17 @@ def run_deepteam(
         )
         for name in vulnerabilities
     ]
-    attack_objs = [_resolve_attack(name)() for name in attacks]
+    target_information = purpose or f"LLM-агент «{agent_config.get('name', 'agent')}» с вызовом инструментов"
+    attack_objs = [_make_attack(name, target_information) for name in attacks]
 
     on_log("info", f"Уязвимости: {', '.join(vulnerabilities)}")
     on_log("info", f"Атаки: {', '.join(attacks)}")
 
     stream = _LogStream(lambda line: on_log("info", line))
-    with contextlib.redirect_stdout(stream), contextlib.redirect_stderr(stream):
+    stdout_router, stderr_router = _install_routers()
+    stdout_router.set_target(stream)
+    stderr_router.set_target(stream)
+    try:
         assessment = red_team(
             model_callback=_build_callback(agent_config),
             vulnerabilities=vulnerability_objs,
@@ -143,6 +203,9 @@ def run_deepteam(
             async_mode=False,
             target_purpose=purpose,
         )
+    finally:
+        stdout_router.set_target(None)
+        stderr_router.set_target(None)
     stream.flush()
 
     test_cases = list(getattr(assessment, "test_cases", []) or [])

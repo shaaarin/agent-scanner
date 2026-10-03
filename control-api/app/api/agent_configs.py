@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session, select
 
 from app.db import get_session
-from app.models import AgentConfig
+from app.models import AgentConfig, Scan
 from app.schemas import AgentConfigCreate, AgentConfigUpdate
 
 router = APIRouter(prefix="/agent-configs", tags=["agent-configs"])
@@ -51,5 +51,13 @@ def delete_agent_config(agent_config_id: int, session: Session = Depends(get_ses
     agent_config = session.get(AgentConfig, agent_config_id)
     if not agent_config:
         raise HTTPException(status_code=404, detail="agent config not found")
+    # SQLite не проверяет внешние ключи: без этой проверки сканы агента
+    # остались бы без конфигурации и не открывались бы и не запускались.
+    scans = session.exec(select(Scan).where(Scan.agent_config_id == agent_config_id)).all()
+    if scans:
+        raise HTTPException(
+            status_code=409,
+            detail=f"У агента есть сканирования ({len(scans)}): сначала удалите их на странице «Сканирования»",
+        )
     session.delete(agent_config)
     session.commit()

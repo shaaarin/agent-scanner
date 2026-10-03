@@ -72,7 +72,7 @@ class _StreamAccumulateCallback:
 
     def __init__(self) -> None:
         self.accumulator = openai_provider.StreamAccumulator()
-        self._buffer = ""
+        self._buffer = b""
 
     def __call__(self, chunk: bytes) -> bytes:
         events, self._buffer = openai_provider.parse_sse_lines(chunk, self._buffer)
@@ -104,7 +104,6 @@ class InjectionAddon:
             host=flow.request.pretty_host,
             raw_excerpt=json.dumps(body),
             upstream_base_url=_upstream_base_url(flow),
-            request_authorization=flow.request.headers.get("Authorization", ""),
         )
 
     async def responseheaders(self, flow: http.HTTPFlow) -> None:
@@ -140,9 +139,9 @@ class InjectionAddon:
             raw_excerpt=json.dumps(response_body),
         )
 
-    async def _log_event(
-        self, *, scan, flow_id, direction, host, raw_excerpt, upstream_base_url=None, request_authorization=None
-    ) -> None:
+    async def _log_event(self, *, scan, flow_id, direction, host, raw_excerpt, upstream_base_url=None) -> None:
+        # Заголовок Authorization агента (его настоящий ключ LLM) сюда не
+        # передаётся: TrafficEvent его не хранит, а по сети он уходил.
         await control_client.post_event(
             {
                 "session_id": SESSION_ID,
@@ -158,7 +157,6 @@ class InjectionAddon:
                 "detail": "",
                 "raw_excerpt": raw_excerpt,
                 "upstream_base_url": upstream_base_url,
-                "request_authorization": request_authorization,
             }
         )
 

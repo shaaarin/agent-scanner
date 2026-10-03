@@ -28,6 +28,12 @@ def get_llm_model(llm_model_id: int) -> dict:
     return resp.json()
 
 
+def list_scans(*, status: str, scan_type: str) -> list[dict]:
+    resp = _client.get("/scans", params={"status": status, "scan_type": scan_type})
+    resp.raise_for_status()
+    return resp.json()
+
+
 def patch_scan(scan_id: int, payload: dict) -> dict:
     resp = _client.patch(f"/scans/{scan_id}", json=payload)
     resp.raise_for_status()

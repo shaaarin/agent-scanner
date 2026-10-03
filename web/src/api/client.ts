@@ -9,7 +9,15 @@ function makeClient(baseUrl: string) {
     });
     if (!res.ok) {
       const text = await res.text();
-      throw new Error(`${res.status} ${res.statusText}: ${text}`);
+      // FastAPI отдаёт причину в {"detail": "..."} -- показываем её, а не сырой JSON.
+      let detail = text;
+      try {
+        const parsed = JSON.parse(text);
+        if (typeof parsed?.detail === "string") detail = parsed.detail;
+      } catch {
+        // не JSON -- оставляем текст как есть
+      }
+      throw new Error(`${res.status} ${res.statusText}: ${detail}`);
     }
     if (res.status === 204) {
       return undefined as T;
