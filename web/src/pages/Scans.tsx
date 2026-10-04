@@ -25,6 +25,11 @@ const DEEPTEAM_ATTACKS = [
   "AuthorityEscalation", "EmotionalManipulation"
 ];
 
+// Идентификаторы должны совпадать с реестром scanner-mcp. Пока реализации
+// сканеров не подключены, список пуст; scanner_ids: [] означает «запустить
+// все доступные проверки».
+const MCP_SCANNERS: string[] = [];
+
 export function Scans() {
   const navigate = useNavigate();
   const [scans, setScans] = useState<Scan[]>([]);
@@ -43,7 +48,7 @@ export function Scans() {
   const [mcpTransport, setMcpTransport] = useState<MCPTransport>("auto");
   const [mcpBearerToken, setMcpBearerToken] = useState("");
   const [mcpHeaders, setMcpHeaders] = useState("{}");
-  const [mcpScannerIds, setMcpScannerIds] = useState("");
+  const [selectedMcpScanners, setSelectedMcpScanners] = useState<string[]>([]);
   const [mcpTimeoutSeconds, setMcpTimeoutSeconds] = useState(30);
   const [mcpVerifyTls, setMcpVerifyTls] = useState(true);
   const [pageError, setPageError] = useState<string | null>(null);
@@ -104,7 +109,7 @@ export function Scans() {
         config.server_url = mcpServerUrl.trim();
         config.transport = mcpTransport;
         config.headers = headers;
-        config.scanner_ids = mcpScannerIds.split(",").map((value) => value.trim()).filter(Boolean);
+        config.scanner_ids = selectedMcpScanners;
         config.timeout_seconds = mcpTimeoutSeconds;
         config.verify_tls = mcpVerifyTls;
       }
@@ -129,7 +134,7 @@ export function Scans() {
       setMcpTransport("auto");
       setMcpBearerToken("");
       setMcpHeaders("{}");
-      setMcpScannerIds("");
+      setSelectedMcpScanners([]);
       setMcpTimeoutSeconds(30);
       setMcpVerifyTls(true);
       api.get<Scan[]>("/scans").then(setScans);
@@ -407,18 +412,40 @@ export function Scans() {
                   </p>
                 </div>
                 <div style={{ marginBottom: "1rem" }}>
-                  <label style={{ display: "block", marginBottom: "0.5rem" }}>Идентификаторы сканеров</label>
-                  <input
-                    type="text"
-                    className="input"
-                    value={mcpScannerIds}
-                    onChange={(e) => setMcpScannerIds(e.target.value)}
-                    placeholder="scanner-a, scanner-b"
-                    style={{ width: "100%" }}
-                  />
-                  <p style={{ margin: "0.4rem 0 0", fontSize: 12, color: "var(--text-500)" }}>
-                    Через запятую. Оставьте пустым, чтобы запустить все доступные проверки.
-                  </p>
+                  <label style={{ display: "block", marginBottom: "0.5rem" }}>
+                    MCP-сканеры · выбрано: {selectedMcpScanners.length}
+                  </label>
+                  <div style={{
+                    maxHeight: "150px",
+                    overflow: "auto",
+                    border: "0.1rem solid var(--separator-default)",
+                    borderRadius: "var(--radius-m)",
+                    padding: "0.5rem",
+                  }}>
+                    {MCP_SCANNERS.length === 0 ? (
+                      <p style={{ margin: 0, fontSize: "0.9rem", color: "var(--text-500)" }}>
+                        Доступные MCP-сканеры пока не зарегистрированы. При пустом списке будут запущены все доступные проверки.
+                      </p>
+                    ) : (
+                      MCP_SCANNERS.map((scannerId) => (
+                        <label key={scannerId} style={{ display: "block", marginBottom: "0.25rem", fontSize: "0.9rem" }}>
+                          <input
+                            type="checkbox"
+                            checked={selectedMcpScanners.includes(scannerId)}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setSelectedMcpScanners([...selectedMcpScanners, scannerId]);
+                              } else {
+                                setSelectedMcpScanners(selectedMcpScanners.filter((id) => id !== scannerId));
+                              }
+                            }}
+                            style={{ marginRight: "0.5rem" }}
+                          />
+                          {scannerId}
+                        </label>
+                      ))
+                    )}
+                  </div>
                 </div>
                 <div style={{ marginBottom: "1rem" }}>
                   <label style={{ display: "block", marginBottom: "0.5rem" }}>Таймаут соединения, секунд</label>
