@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../api/client";
-import type { Scan, ScanType, AgentConfig, LLMModel, CodeScanSeverity } from "../api/types";
+import type { Scan, ScanType, AgentConfig, LLMModel, CodeScanSeverity, MCPTransport } from "../api/types";
 import { SEVERITY_LABELS, SEVERITY_ORDER, scanTypeLabel } from "../api/scanTypes";
 import { PageHeader } from "../components/PageHeader";
 
@@ -39,12 +39,21 @@ export function Scans() {
   const [selectedAttacks, setSelectedAttacks] = useState<string[]>([]);
   const [minSeverity, setMinSeverity] = useState<CodeScanSeverity>("medium");
   const [guidance, setGuidance] = useState("");
+  const [mcpServerUrl, setMcpServerUrl] = useState("");
+  const [mcpTransport, setMcpTransport] = useState<MCPTransport>("auto");
+  const [mcpBearerToken, setMcpBearerToken] = useState("");
+  const [mcpHeaders, setMcpHeaders] = useState("{}");
+  const [mcpScannerIds, setMcpScannerIds] = useState("");
+  const [mcpTimeoutSeconds, setMcpTimeoutSeconds] = useState(30);
+  const [mcpVerifyTls, setMcpVerifyTls] = useState(true);
   const [pageError, setPageError] = useState<string | null>(null);
   const [createError, setCreateError] = useState<string | null>(null);
 
   // Модель-судья нужна только динамическому тестированию (DeepTeam).
   const needsLlmModel = newScanType === "deep_team";
-  const canCreate = Boolean(newScanName && selectedAgentId && (!needsLlmModel || selectedLlmModelId));
+  const needsAgent = newScanType !== "mcp";
+  const hasRequiredTarget = newScanType === "mcp" ? Boolean(mcpServerUrl.trim()) : Boolean(selectedAgentId);
+  const canCreate = Boolean(newScanName.trim() && hasRequiredTarget && (!needsLlmModel || selectedLlmModelId));
 
   useEffect(() => {
     Promise.all([
@@ -65,23 +74,45 @@ export function Scans() {
   const handleCreateScan = async () => {
     if (!canCreate) return;
 
-    const config: Record<string, unknown> = {};
-
-    if (newScanType === "deep_team") {
-      config.eval_llm_model_id = selectedLlmModelId;
-      config.vulnerabilities = selectedVulnerabilities.length > 0 ? selectedVulnerabilities : ["BFLA", "BOLA", "RBAC"];
-      config.attacks = selectedAttacks.length > 0 ? selectedAttacks : ["PromptInjection"];
-    } else if (newScanType === "code_scan") {
-      config.min_severity = minSeverity;
-      config.guidance = guidance.trim() || null;
-    }
-
     setCreateError(null);
     try {
+      const config: Record<string, unknown> = {};
+
+      if (newScanType === "deep_team") {
+        config.eval_llm_model_id = selectedLlmModelId;
+        config.vulnerabilities = selectedVulnerabilities.length > 0 ? selectedVulnerabilities : ["BFLA", "BOLA", "RBAC"];
+        config.attacks = selectedAttacks.length > 0 ? selectedAttacks : ["PromptInjection"];
+      } else if (newScanType === "code_scan") {
+        config.min_severity = minSeverity;
+        config.guidance = guidance.trim() || null;
+      } else if (newScanType === "mcp") {
+        const parsedHeaders: unknown = JSON.parse(mcpHeaders || "{}");
+        if (!parsedHeaders || typeof parsedHeaders !== "object" || Array.isArray(parsedHeaders)) {
+          throw new Error("Дополнительные заголовки должны быть JSON-объектом");
+        }
+        const headers = Object.fromEntries(
+          Object.entries(parsedHeaders).map(([name, value]) => {
+            if (typeof value !== "string") {
+              throw new Error(`Значение заголовка ${name} должно быть строкой`);
+            }
+            return [name, value];
+          }),
+        );
+        if (mcpBearerToken.trim()) {
+          headers.Authorization = `Bearer ${mcpBearerToken.trim()}`;
+        }
+        config.server_url = mcpServerUrl.trim();
+        config.transport = mcpTransport;
+        config.headers = headers;
+        config.scanner_ids = mcpScannerIds.split(",").map((value) => value.trim()).filter(Boolean);
+        config.timeout_seconds = mcpTimeoutSeconds;
+        config.verify_tls = mcpVerifyTls;
+      }
+
       await api.post("/scans", {
-        name: newScanName,
+        name: newScanName.trim(),
         type: newScanType,
-        agent_config_id: selectedAgentId,
+        agent_config_id: needsAgent ? selectedAgentId : null,
         status: "pending",
         session_id: `scan-${Date.now()}`,
         config: JSON.stringify(config),
@@ -94,6 +125,13 @@ export function Scans() {
       setSelectedAttacks([]);
       setMinSeverity("medium");
       setGuidance("");
+      setMcpServerUrl("");
+      setMcpTransport("auto");
+      setMcpBearerToken("");
+      setMcpHeaders("{}");
+      setMcpScannerIds("");
+      setMcpTimeoutSeconds(30);
+      setMcpVerifyTls(true);
       api.get<Scan[]>("/scans").then(setScans);
     } catch (error) {
       console.error("Failed to create scan:", error);
@@ -247,6 +285,8 @@ export function Scans() {
             <p style={{ margin: "0 0 1.5rem", color: "var(--text-500)", fontSize: 13 }}>
               {newScanType === "code_scan"
                 ? "Платформа скачает код агента из его репозитория и проверит его через promptfoo. Агент не запускается, анализ выполняется в облаке Promptfoo."
+                : newScanType === "mcp"
+                ? "Платформа подключится к удалённому MCP-серверу и запустит выбранные проверки безопасности."
                 : "Платформа запустит агента и проверит его ответы на выбранные классы атак."}
             </p>
             <div style={{ marginBottom: "1rem" }}>
@@ -274,6 +314,7 @@ export function Scans() {
                 <option value="agent_skills">Agent Skills (в разработке)</option>
               </select>
             </div>
+            {needsAgent && (
             <div style={{ marginBottom: "1rem" }}>
               <label style={{ display: "block", marginBottom: "0.5rem" }}>Тестируемый агент</label>
               <select
@@ -290,6 +331,7 @@ export function Scans() {
                 ))}
               </select>
             </div>
+            )}
             {needsLlmModel && (
             <div style={{ marginBottom: "1rem" }}>
               <label style={{ display: "block", marginBottom: "0.5rem" }}>LLM-модель для оценки</label>
@@ -310,6 +352,95 @@ export function Scans() {
                 Ею будут генерироваться атаки и оцениваться ответы агента.
               </p>
             </div>
+            )}
+
+            {newScanType === "mcp" && (
+              <>
+                <div style={{ marginBottom: "1rem" }}>
+                  <label style={{ display: "block", marginBottom: "0.5rem" }}>Адрес MCP-сервера</label>
+                  <input
+                    type="url"
+                    className="input"
+                    value={mcpServerUrl}
+                    onChange={(e) => setMcpServerUrl(e.target.value)}
+                    placeholder="https://example.com/mcp"
+                    style={{ width: "100%" }}
+                  />
+                </div>
+                <div style={{ marginBottom: "1rem" }}>
+                  <label style={{ display: "block", marginBottom: "0.5rem" }}>Транспорт MCP</label>
+                  <select
+                    className="input"
+                    value={mcpTransport}
+                    onChange={(e) => setMcpTransport(e.target.value as MCPTransport)}
+                    style={{ width: "100%" }}
+                  >
+                    <option value="auto">Автоопределение</option>
+                    <option value="streamable_http">Streamable HTTP</option>
+                    <option value="sse">Legacy SSE</option>
+                  </select>
+                </div>
+                <div style={{ marginBottom: "1rem" }}>
+                  <label style={{ display: "block", marginBottom: "0.5rem" }}>Bearer Token</label>
+                  <input
+                    type="password"
+                    className="input"
+                    value={mcpBearerToken}
+                    onChange={(e) => setMcpBearerToken(e.target.value)}
+                    placeholder="Необязательно"
+                    autoComplete="off"
+                    style={{ width: "100%" }}
+                  />
+                </div>
+                <div style={{ marginBottom: "1rem" }}>
+                  <label style={{ display: "block", marginBottom: "0.5rem" }}>Дополнительные заголовки</label>
+                  <textarea
+                    className="input"
+                    value={mcpHeaders}
+                    onChange={(e) => setMcpHeaders(e.target.value)}
+                    placeholder={'{"X-API-Key": "value"}'}
+                    rows={3}
+                    style={{ width: "100%", resize: "vertical", fontFamily: "monospace" }}
+                  />
+                  <p style={{ margin: "0.4rem 0 0", fontSize: 12, color: "var(--text-500)" }}>
+                    JSON-объект со строковыми значениями. Bearer Token будет добавлен как заголовок Authorization.
+                  </p>
+                </div>
+                <div style={{ marginBottom: "1rem" }}>
+                  <label style={{ display: "block", marginBottom: "0.5rem" }}>Идентификаторы сканеров</label>
+                  <input
+                    type="text"
+                    className="input"
+                    value={mcpScannerIds}
+                    onChange={(e) => setMcpScannerIds(e.target.value)}
+                    placeholder="scanner-a, scanner-b"
+                    style={{ width: "100%" }}
+                  />
+                  <p style={{ margin: "0.4rem 0 0", fontSize: 12, color: "var(--text-500)" }}>
+                    Через запятую. Оставьте пустым, чтобы запустить все доступные проверки.
+                  </p>
+                </div>
+                <div style={{ marginBottom: "1rem" }}>
+                  <label style={{ display: "block", marginBottom: "0.5rem" }}>Таймаут соединения, секунд</label>
+                  <input
+                    type="number"
+                    className="input"
+                    min={1}
+                    max={300}
+                    value={mcpTimeoutSeconds}
+                    onChange={(e) => setMcpTimeoutSeconds(Number(e.target.value))}
+                    style={{ width: "100%" }}
+                  />
+                </div>
+                <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "1.5rem" }}>
+                  <input
+                    type="checkbox"
+                    checked={mcpVerifyTls}
+                    onChange={(e) => setMcpVerifyTls(e.target.checked)}
+                  />
+                  Проверять TLS-сертификат сервера
+                </label>
+              </>
             )}
 
             {newScanType === "code_scan" && (

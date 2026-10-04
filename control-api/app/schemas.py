@@ -1,7 +1,7 @@
 from datetime import datetime
-from typing import Optional
+from typing import Literal, Optional
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator
 
 from app.models import (
     EventDirection,
@@ -70,6 +70,38 @@ class AgentConfigUpdate(BaseModel):
     interaction_mode: Optional[InteractionMode] = None
     api_config: Optional[dict] = None
     langgraph_config: Optional[dict] = None
+
+
+class MCPScanConfig(BaseModel):
+    """Connection settings consumed by the future scanner-mcp service.
+
+    An empty scanner_ids list means "run every scanner available in the
+    service". This keeps scan creation independent from the scanner catalogue
+    while that service is being implemented.
+    """
+
+    server_url: HttpUrl
+    transport: Literal["auto", "streamable_http", "sse"] = "auto"
+    headers: dict[str, str] = Field(default_factory=dict)
+    scanner_ids: list[str] = Field(default_factory=list)
+    timeout_seconds: int = Field(default=30, ge=1, le=300)
+    verify_tls: bool = True
+
+    @field_validator("headers")
+    @classmethod
+    def validate_headers(cls, value: dict[str, str]) -> dict[str, str]:
+        normalized: dict[str, str] = {}
+        for name, header_value in value.items():
+            clean_name = name.strip()
+            if not clean_name:
+                raise ValueError("header name must not be empty")
+            normalized[clean_name] = header_value
+        return normalized
+
+    @field_validator("scanner_ids")
+    @classmethod
+    def normalize_scanner_ids(cls, value: list[str]) -> list[str]:
+        return list(dict.fromkeys(scanner_id.strip() for scanner_id in value if scanner_id.strip()))
 
 
 class ScanUpdate(BaseModel):

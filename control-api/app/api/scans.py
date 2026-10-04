@@ -5,11 +5,12 @@ from typing import Optional
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import ValidationError
 from sqlmodel import Session, delete, select
 
 from app.db import engine, get_session
 from app.models import AgentConfig, Scan, ScanLog, ScanLogLevel, ScanStatus, ScanType
-from app.schemas import ScanLogCreate, ScanUpdate
+from app.schemas import MCPScanConfig, ScanLogCreate, ScanUpdate
 
 router = APIRouter(prefix="/scans", tags=["scans"])
 
@@ -34,6 +35,32 @@ def utcnow() -> datetime:
 
 def _log(session: Session, scan_id: int, message: str, *, level: ScanLogLevel = ScanLogLevel.INFO, phase: Optional[str] = None) -> None:
     session.add(ScanLog(scan_id=scan_id, level=level, phase=phase, message=message))
+
+
+def _validate_scan_for_create(scan: Scan) -> None:
+    """Validate the target and type-specific config before persistence."""
+    if scan.type in (ScanType.DEEP_TEAM, ScanType.CODE_SCAN) and scan.agent_config_id is None:
+        raise HTTPException(status_code=422, detail="Для этого типа сканирования требуется конфигурация агента")
+
+    if scan.type != ScanType.MCP:
+        return
+    if scan.agent_config_id is not None:
+        raise HTTPException(status_code=422, detail="Для MCP-сканирования конфигурация агента не используется")
+
+    try:
+        raw_config = json.loads(scan.config or "{}")
+    except (json.JSONDecodeError, TypeError) as exc:
+        raise HTTPException(status_code=422, detail="config должен содержать JSON-объект") from exc
+    if not isinstance(raw_config, dict):
+        raise HTTPException(status_code=422, detail="config MCP-сканирования должен быть JSON-объектом")
+
+    try:
+        config = MCPScanConfig.model_validate(raw_config)
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=exc.errors()) from exc
+
+    # Persist normalized values so scanner-mcp receives one stable contract.
+    scan.config = json.dumps(config.model_dump(mode="json"), ensure_ascii=False)
 
 
 @router.get("")
@@ -108,6 +135,7 @@ def get_scan_agent_config(scan_id: int) -> dict:
 @router.post("")
 def create_scan(scan: Scan) -> Scan:
     """Create a new scan."""
+    _validate_scan_for_create(scan)
     with Session(engine) as session:
         session.add(scan)
         session.commit()

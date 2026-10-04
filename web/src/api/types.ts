@@ -74,7 +74,7 @@ export interface Scan {
   id: number;
   name: string;
   type: ScanType;
-  agent_config_id: number;
+  agent_config_id: number | null;
   status: ScanStatus;
   session_id: string;
   config: string; // JSON string
@@ -116,6 +116,7 @@ export interface ScanLog {
 }
 
 export type CodeScanSeverity = "critical" | "high" | "medium" | "low";
+export type MCPTransport = "auto" | "streamable_http" | "sse";
 
 export interface ScanConfig {
   // deep_team
@@ -126,6 +127,13 @@ export interface ScanConfig {
   // code_scan
   min_severity?: CodeScanSeverity;
   guidance?: string | null;
+  // mcp; an empty scanner_ids list means all scanners available in scanner-mcp
+  server_url?: string;
+  transport?: MCPTransport;
+  headers?: Record<string, string>;
+  scanner_ids?: string[];
+  timeout_seconds?: number;
+  verify_tls?: boolean;
 }
 
 export interface CodeScanFinding {

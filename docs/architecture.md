@@ -136,7 +136,7 @@ Agent Scanner проверяет LLM-агентов с вызовом инстр
 |---|---|
 | `LLMModel` | Провайдер + модель + `base_url` + `api_key`. Хранится в открытом виде (принятый техдолг). Используется как модель-судья DeepTeam. |
 | `AgentConfig` | Репозиторий (`git_repo_url`/`git_ref`/`git_access_token`), `dockerfile_path`, `env_example_path`, `env_vars`, `api_port`, `agent_purpose` (назначение агента для DeepTeam), `interaction_mode` (`none`/`api`/`langgraph`), `api_config`, `langgraph_config`. Агента со сканированиями удалить нельзя (409): SQLite не проверяет внешние ключи. |
-| `Scan` | Параметры и состояние скана: `type`, `status`, `session_id`, JSON `config`, JSON `results`, `phase`, `error`, а также метаданные запуска (`agent_namespace`, `agent_pod_name`, `build_job_name`, `built_image`), `started_at`/`finished_at`. |
+| `Scan` | Параметры и состояние скана: `type`, необязательный `agent_config_id` (у удалённого MCP-сервера его нет), `status`, `session_id`, JSON `config`, JSON `results`, `phase`, `error`, а также метаданные запуска (`agent_namespace`, `agent_pod_name`, `build_job_name`, `built_image`), `started_at`/`finished_at`. |
 | `ScanLog` | Строка журнала скана: `level` (`info`/`success`/`error`), `phase`, `message`, `created_at`. |
 | `TrafficEvent` | Перехваченный обмен: `session_id`, `scan_id`, `flow_id`, `direction` (`request`/`response`), `provider`, `host`, `path`, полное тело `raw_excerpt`, `upstream_base_url`. |
 
@@ -144,6 +144,7 @@ Agent Scanner проверяет LLM-агентов с вызовом инстр
 
 - `deep_team`: `{"eval_llm_model_id": <id>, "vulnerabilities": [...], "attacks": [...]}`;
 - `code_scan`: `{"min_severity": "low|medium|high|critical", "guidance": <текст|null>}`.
+- `mcp`: `{"server_url": <URL>, "transport": "auto|streamable_http|sse", "headers": {...}, "scanner_ids": [...], "timeout_seconds": 30, "verify_tls": true}`. Пустой `scanner_ids` означает все доступные проверки. Заголовки, включая авторизационные, хранятся в открытом виде в рамках принятого техдолга MVP.
 
 `Scan.results` по типам: `deep_team` — `vulnerability_results` и
 `overall_score` (§7.1), `code_scan` — `summary` и `findings` (§7.2).

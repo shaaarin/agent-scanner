@@ -140,13 +140,18 @@ class Scan(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     name: str = Field(index=True)
     type: ScanType
-    agent_config_id: int = Field(foreign_key="agentconfig.id", index=True)
+    # Agent-backed scans (deep_team, code_scan) require this reference at the
+    # API level. Remote targets such as an MCP server do not have an
+    # AgentConfig, so the database relationship itself is optional.
+    agent_config_id: Optional[int] = Field(default=None, foreign_key="agentconfig.id", index=True)
     status: ScanStatus = ScanStatus.PENDING
     session_id: str = Field(index=True)  # Links scan to proxy session
     # JSON config specific to scan type:
     # - DEEP_TEAM: {"eval_llm_model_id": int, "vulnerabilities": [...], "attacks": [...]}
     # - CODE_SCAN: {"min_severity": "low|medium|high|critical", "guidance": str | null}
-    # - MCP: {} (placeholder)
+    # - MCP: {"server_url": str, "transport": "auto|streamable_http|sse",
+    #         "headers": {...}, "scanner_ids": [...],
+    #         "timeout_seconds": int, "verify_tls": bool}
     # - AGENT_SKILLS: {} (placeholder)
     config: str = Field(default="{}", sa_column=Column(JSON))
     # JSON results, shape depends on type:

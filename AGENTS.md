@@ -65,6 +65,12 @@
   запустить нельзя (400). Новый сканер = новая папка + сервис в compose +
   строка в `SCANNERS` + значение `ScanType` + фазы/результаты в `web`.
   Общий код между сканерами не выносится: `control_client.py` у каждого свой.
+- **MCP-конфигурация.** Скан `mcp` не связан с `AgentConfig`
+  (`Scan.agent_config_id = null`). Его `Scan.config` содержит `server_url`,
+  `transport` (`auto`/`streamable_http`/`sse`), `headers`, `scanner_ids`,
+  `timeout_seconds` и `verify_tls`. Пустой `scanner_ids` означает «все
+  доступные проверки». Сервис `scanner-mcp` пока не подключён, поэтому такой
+  скан можно настроить и сохранить, но нельзя запустить.
 - **Анализ кода — облако Promptfoo.** `scanner-promptfoo` отправляет код
   агента в Promptfoo (ключ `PROMPTFOO_API_KEY` из `.env`); модель анализа
   выбирает Promptfoo, `LLMModel` не участвует. Версия CLI зафиксирована в
