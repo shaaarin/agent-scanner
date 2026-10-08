@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Optional
 
-from sqlalchemy import Column, JSON, Text
+from sqlalchemy import Column, JSON, LargeBinary, Text
 from sqlmodel import Field, SQLModel
 
 
@@ -132,6 +132,25 @@ class ScanStatus(str, Enum):
     FAILED = "failed"
 
 
+class MCPArtifact(SQLModel, table=True):
+    """An immutable MCPB uploaded by the user or materialized from HTTPS.
+
+    The archive stays as a BLOB in SQLite for the MVP. List/read schemas never
+    expose ``content``; a future scanner-mcp service will request it through a
+    dedicated endpoint immediately before scanning.
+    """
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    original_filename: str
+    source_type: str  # upload | url
+    source_url: Optional[str] = None
+    sha256: str = Field(index=True)
+    size_bytes: int
+    manifest: dict = Field(default_factory=dict, sa_column=Column(JSON))
+    content: bytes = Field(sa_column=Column(LargeBinary, nullable=False))
+    created_at: datetime = Field(default_factory=utcnow)
+
+
 class Scan(SQLModel, table=True):
     """Security scan configuration for an agent: DeepTeam red teaming,
     MCP testing, or Agent Skills assessment.
@@ -149,9 +168,8 @@ class Scan(SQLModel, table=True):
     # JSON config specific to scan type:
     # - DEEP_TEAM: {"eval_llm_model_id": int, "vulnerabilities": [...], "attacks": [...]}
     # - CODE_SCAN: {"min_severity": "low|medium|high|critical", "guidance": str | null}
-    # - MCP: {"server_url": str, "transport": "auto|streamable_http|sse",
-    #         "headers": {...}, "scanner_ids": [...],
-    #         "timeout_seconds": int, "verify_tls": bool}
+    # - MCP: {"target": {"kind": "remote|repository|bundle", ...},
+    #         "scanner_ids": [...], "timeout_seconds": int}
     # - AGENT_SKILLS: {} (placeholder)
     config: str = Field(default="{}", sa_column=Column(JSON))
     # JSON results, shape depends on type:

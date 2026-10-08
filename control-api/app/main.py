@@ -6,6 +6,7 @@ from app.api import (
     events,
     library,
     llm_models,
+    mcp_artifacts,
     scans,
 )
 from app.db import init_db
@@ -23,6 +24,7 @@ app.add_middleware(
 app.include_router(events.router)
 app.include_router(llm_models.router)
 app.include_router(agent_configs.router)
+app.include_router(mcp_artifacts.router)
 app.include_router(scans.router)
 app.include_router(library.router)
 

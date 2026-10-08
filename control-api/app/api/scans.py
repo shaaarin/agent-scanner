@@ -9,8 +9,8 @@ from pydantic import ValidationError
 from sqlmodel import Session, delete, select
 
 from app.db import engine, get_session
-from app.models import AgentConfig, Scan, ScanLog, ScanLogLevel, ScanStatus, ScanType
-from app.schemas import MCPScanConfig, ScanLogCreate, ScanUpdate
+from app.models import AgentConfig, MCPArtifact, Scan, ScanLog, ScanLogLevel, ScanStatus, ScanType
+from app.schemas import MCPBundleTarget, MCPScanConfig, ScanLogCreate, ScanUpdate
 
 router = APIRouter(prefix="/scans", tags=["scans"])
 
@@ -37,13 +37,13 @@ def _log(session: Session, scan_id: int, message: str, *, level: ScanLogLevel = 
     session.add(ScanLog(scan_id=scan_id, level=level, phase=phase, message=message))
 
 
-def _validate_scan_for_create(scan: Scan) -> None:
+def _validate_scan_for_create(scan: Scan) -> Optional[MCPScanConfig]:
     """Validate the target and type-specific config before persistence."""
     if scan.type in (ScanType.DEEP_TEAM, ScanType.CODE_SCAN) and scan.agent_config_id is None:
         raise HTTPException(status_code=422, detail="Для этого типа сканирования требуется конфигурация агента")
 
     if scan.type != ScanType.MCP:
-        return
+        return None
     if scan.agent_config_id is not None:
         raise HTTPException(status_code=422, detail="Для MCP-сканирования конфигурация агента не используется")
 
@@ -61,6 +61,7 @@ def _validate_scan_for_create(scan: Scan) -> None:
 
     # Persist normalized values so scanner-mcp receives one stable contract.
     scan.config = json.dumps(config.model_dump(mode="json"), ensure_ascii=False)
+    return config
 
 
 @router.get("")
@@ -135,8 +136,11 @@ def get_scan_agent_config(scan_id: int) -> dict:
 @router.post("")
 def create_scan(scan: Scan) -> Scan:
     """Create a new scan."""
-    _validate_scan_for_create(scan)
+    mcp_config = _validate_scan_for_create(scan)
     with Session(engine) as session:
+        if mcp_config and isinstance(mcp_config.target, MCPBundleTarget):
+            if not session.get(MCPArtifact, mcp_config.target.artifact_id):
+                raise HTTPException(status_code=422, detail="Указанный MCPB-артефакт не найден")
         session.add(scan)
         session.commit()
         session.refresh(scan)

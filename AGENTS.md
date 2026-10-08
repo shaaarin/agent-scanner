@@ -66,11 +66,15 @@
   строка в `SCANNERS` + значение `ScanType` + фазы/результаты в `web`.
   Общий код между сканерами не выносится: `control_client.py` у каждого свой.
 - **MCP-конфигурация.** Скан `mcp` не связан с `AgentConfig`
-  (`Scan.agent_config_id = null`). Его `Scan.config` содержит `server_url`,
-  `transport` (`auto`/`streamable_http`/`sse`), `headers`, `scanner_ids`,
-  `timeout_seconds` и `verify_tls`. Пустой `scanner_ids` означает «все
-  доступные проверки». Сервис `scanner-mcp` пока не подключён, поэтому такой
-  скан можно настроить и сохранить, но нельзя запустить.
+  (`Scan.agent_config_id = null`). Его `Scan.config.target` описывает один из
+  источников: удалённый сервер (`remote`), Git-репозиторий (`repository`) или
+  загруженный `MCPArtifact` (`bundle`). MCPB принимается локальным файлом или
+  скачивается сразу по публичному HTTPS URI, проверяется как ZIP с корневым
+  `manifest.json` и хранится BLOB-ом в SQLite. `scanner_ids` и
+  `timeout_seconds` общие для всех источников; пустой `scanner_ids` означает
+  «все доступные проверки». Клонирование, установка и запуск относятся к
+  будущему `scanner-mcp`; пока скан можно настроить и сохранить, но нельзя
+  запустить.
 - **Анализ кода — облако Promptfoo.** `scanner-promptfoo` отправляет код
   агента в Promptfoo (ключ `PROMPTFOO_API_KEY` из `.env`); модель анализа
   выбирает Promptfoo, `LLMModel` не участвует. Версия CLI зафиксирована в

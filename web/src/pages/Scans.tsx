@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../api/client";
-import type { Scan, ScanType, AgentConfig, LLMModel, CodeScanSeverity, MCPTransport } from "../api/types";
+import type {
+  Scan, ScanType, AgentConfig, LLMModel, CodeScanSeverity, MCPArtifact, MCPTransport, MCPTargetKind,
+} from "../api/types";
 import { SEVERITY_LABELS, SEVERITY_ORDER, scanTypeLabel } from "../api/scanTypes";
 import { PageHeader } from "../components/PageHeader";
 
@@ -44,6 +46,7 @@ export function Scans() {
   const [selectedAttacks, setSelectedAttacks] = useState<string[]>([]);
   const [minSeverity, setMinSeverity] = useState<CodeScanSeverity>("medium");
   const [guidance, setGuidance] = useState("");
+  const [mcpTargetKind, setMcpTargetKind] = useState<MCPTargetKind>("remote");
   const [mcpServerUrl, setMcpServerUrl] = useState("");
   const [mcpTransport, setMcpTransport] = useState<MCPTransport>("auto");
   const [mcpBearerToken, setMcpBearerToken] = useState("");
@@ -51,13 +54,31 @@ export function Scans() {
   const [selectedMcpScanners, setSelectedMcpScanners] = useState<string[]>([]);
   const [mcpTimeoutSeconds, setMcpTimeoutSeconds] = useState(30);
   const [mcpVerifyTls, setMcpVerifyTls] = useState(true);
+  const [mcpGitRepoUrl, setMcpGitRepoUrl] = useState("");
+  const [mcpGitRef, setMcpGitRef] = useState("main");
+  const [mcpGitAccessToken, setMcpGitAccessToken] = useState("");
+  const [mcpConfigPath, setMcpConfigPath] = useState("mcp_config.json");
+  const [mcpRepoEnv, setMcpRepoEnv] = useState("{}");
+  const [mcpBundleSource, setMcpBundleSource] = useState<"upload" | "url">("upload");
+  const [mcpBundleFile, setMcpBundleFile] = useState<File | null>(null);
+  const [mcpBundleUrl, setMcpBundleUrl] = useState("");
+  const [mcpBundleExpectedSha, setMcpBundleExpectedSha] = useState("");
+  const [mcpBundleUserConfig, setMcpBundleUserConfig] = useState("{}");
+  const [mcpArtifact, setMcpArtifact] = useState<MCPArtifact | null>(null);
+  const [mcpArtifactUploading, setMcpArtifactUploading] = useState(false);
+  const [mcpArtifactError, setMcpArtifactError] = useState<string | null>(null);
   const [pageError, setPageError] = useState<string | null>(null);
   const [createError, setCreateError] = useState<string | null>(null);
 
   // Модель-судья нужна только динамическому тестированию (DeepTeam).
   const needsLlmModel = newScanType === "deep_team";
   const needsAgent = newScanType !== "mcp";
-  const hasRequiredTarget = newScanType === "mcp" ? Boolean(mcpServerUrl.trim()) : Boolean(selectedAgentId);
+  const hasMcpTarget = mcpTargetKind === "remote"
+    ? Boolean(mcpServerUrl.trim())
+    : mcpTargetKind === "repository"
+      ? Boolean(mcpGitRepoUrl.trim() && mcpGitRef.trim() && mcpConfigPath.trim())
+      : Boolean(mcpArtifact);
+  const hasRequiredTarget = newScanType === "mcp" ? hasMcpTarget : Boolean(selectedAgentId);
   const canCreate = Boolean(newScanName.trim() && hasRequiredTarget && (!needsLlmModel || selectedLlmModelId));
 
   useEffect(() => {
@@ -76,6 +97,43 @@ export function Scans() {
     return () => clearInterval(timer);
   }, [scans]);
 
+  const parseStringMap = (value: string, label: string): Record<string, string> => {
+    const parsed: unknown = JSON.parse(value || "{}");
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error(`${label} должны быть JSON-объектом`);
+    }
+    return Object.fromEntries(Object.entries(parsed).map(([name, item]) => {
+      if (typeof item !== "string") throw new Error(`Значение ${name} должно быть строкой`);
+      return [name, item];
+    }));
+  };
+
+  const handleUploadMcpBundle = async () => {
+    setMcpArtifactError(null);
+    setMcpArtifactUploading(true);
+    try {
+      let artifact: MCPArtifact;
+      if (mcpBundleSource === "upload") {
+        if (!mcpBundleFile) throw new Error("Выберите MCPB-файл");
+        const formData = new FormData();
+        formData.append("file", mcpBundleFile);
+        artifact = await api.postForm<MCPArtifact>("/mcp-artifacts/upload", formData);
+      } else {
+        if (!mcpBundleUrl.trim()) throw new Error("Укажите HTTPS URI MCPB-архива");
+        artifact = await api.post<MCPArtifact>("/mcp-artifacts/from-url", {
+          url: mcpBundleUrl.trim(),
+          expected_sha256: mcpBundleExpectedSha.trim() || null,
+        });
+      }
+      setMcpArtifact(artifact);
+    } catch (error) {
+      setMcpArtifact(null);
+      setMcpArtifactError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setMcpArtifactUploading(false);
+    }
+  };
+
   const handleCreateScan = async () => {
     if (!canCreate) return;
 
@@ -91,27 +149,31 @@ export function Scans() {
         config.min_severity = minSeverity;
         config.guidance = guidance.trim() || null;
       } else if (newScanType === "mcp") {
-        const parsedHeaders: unknown = JSON.parse(mcpHeaders || "{}");
-        if (!parsedHeaders || typeof parsedHeaders !== "object" || Array.isArray(parsedHeaders)) {
-          throw new Error("Дополнительные заголовки должны быть JSON-объектом");
+        if (mcpTargetKind === "remote") {
+          const headers = parseStringMap(mcpHeaders, "Дополнительные заголовки");
+          if (mcpBearerToken.trim()) headers.Authorization = `Bearer ${mcpBearerToken.trim()}`;
+          config.target = {
+            kind: "remote", server_url: mcpServerUrl.trim(), transport: mcpTransport, headers, verify_tls: mcpVerifyTls,
+          };
+        } else if (mcpTargetKind === "repository") {
+          config.target = {
+            kind: "repository",
+            git_repo_url: mcpGitRepoUrl.trim(),
+            git_ref: mcpGitRef.trim(),
+            git_access_token: mcpGitAccessToken.trim() || null,
+            config_path: mcpConfigPath.trim(),
+            env: parseStringMap(mcpRepoEnv, "Переменные окружения"),
+          };
+        } else {
+          if (!mcpArtifact) throw new Error("Сначала загрузите MCPB-архив");
+          const userConfig: unknown = JSON.parse(mcpBundleUserConfig || "{}");
+          if (!userConfig || typeof userConfig !== "object" || Array.isArray(userConfig)) {
+            throw new Error("Пользовательская конфигурация MCPB должна быть JSON-объектом");
+          }
+          config.target = { kind: "bundle", artifact_id: mcpArtifact.id, user_config: userConfig };
         }
-        const headers = Object.fromEntries(
-          Object.entries(parsedHeaders).map(([name, value]) => {
-            if (typeof value !== "string") {
-              throw new Error(`Значение заголовка ${name} должно быть строкой`);
-            }
-            return [name, value];
-          }),
-        );
-        if (mcpBearerToken.trim()) {
-          headers.Authorization = `Bearer ${mcpBearerToken.trim()}`;
-        }
-        config.server_url = mcpServerUrl.trim();
-        config.transport = mcpTransport;
-        config.headers = headers;
         config.scanner_ids = selectedMcpScanners;
         config.timeout_seconds = mcpTimeoutSeconds;
-        config.verify_tls = mcpVerifyTls;
       }
 
       await api.post("/scans", {
@@ -130,6 +192,7 @@ export function Scans() {
       setSelectedAttacks([]);
       setMinSeverity("medium");
       setGuidance("");
+      setMcpTargetKind("remote");
       setMcpServerUrl("");
       setMcpTransport("auto");
       setMcpBearerToken("");
@@ -137,6 +200,18 @@ export function Scans() {
       setSelectedMcpScanners([]);
       setMcpTimeoutSeconds(30);
       setMcpVerifyTls(true);
+      setMcpGitRepoUrl("");
+      setMcpGitRef("main");
+      setMcpGitAccessToken("");
+      setMcpConfigPath("mcp_config.json");
+      setMcpRepoEnv("{}");
+      setMcpBundleSource("upload");
+      setMcpBundleFile(null);
+      setMcpBundleUrl("");
+      setMcpBundleExpectedSha("");
+      setMcpBundleUserConfig("{}");
+      setMcpArtifact(null);
+      setMcpArtifactError(null);
       api.get<Scan[]>("/scans").then(setScans);
     } catch (error) {
       console.error("Failed to create scan:", error);
@@ -362,55 +437,90 @@ export function Scans() {
             {newScanType === "mcp" && (
               <>
                 <div style={{ marginBottom: "1rem" }}>
-                  <label style={{ display: "block", marginBottom: "0.5rem" }}>Адрес MCP-сервера</label>
-                  <input
-                    type="url"
-                    className="input"
-                    value={mcpServerUrl}
-                    onChange={(e) => setMcpServerUrl(e.target.value)}
-                    placeholder="https://example.com/mcp"
-                    style={{ width: "100%" }}
-                  />
-                </div>
-                <div style={{ marginBottom: "1rem" }}>
-                  <label style={{ display: "block", marginBottom: "0.5rem" }}>Транспорт MCP</label>
+                  <label style={{ display: "block", marginBottom: "0.5rem" }}>Источник MCP-сервера</label>
                   <select
                     className="input"
-                    value={mcpTransport}
-                    onChange={(e) => setMcpTransport(e.target.value as MCPTransport)}
+                    value={mcpTargetKind}
+                    onChange={(e) => setMcpTargetKind(e.target.value as MCPTargetKind)}
                     style={{ width: "100%" }}
                   >
-                    <option value="auto">Автоопределение</option>
-                    <option value="streamable_http">Streamable HTTP</option>
-                    <option value="sse">Legacy SSE</option>
+                    <option value="remote">Удалённый сервер</option>
+                    <option value="repository">Git-репозиторий</option>
+                    <option value="bundle">MCPB-архив</option>
                   </select>
                 </div>
-                <div style={{ marginBottom: "1rem" }}>
-                  <label style={{ display: "block", marginBottom: "0.5rem" }}>Bearer Token</label>
-                  <input
-                    type="password"
-                    className="input"
-                    value={mcpBearerToken}
-                    onChange={(e) => setMcpBearerToken(e.target.value)}
-                    placeholder="Необязательно"
-                    autoComplete="off"
-                    style={{ width: "100%" }}
-                  />
-                </div>
-                <div style={{ marginBottom: "1rem" }}>
-                  <label style={{ display: "block", marginBottom: "0.5rem" }}>Дополнительные заголовки</label>
-                  <textarea
-                    className="input"
-                    value={mcpHeaders}
-                    onChange={(e) => setMcpHeaders(e.target.value)}
-                    placeholder={'{"X-API-Key": "value"}'}
-                    rows={3}
-                    style={{ width: "100%", resize: "vertical", fontFamily: "monospace" }}
-                  />
-                  <p style={{ margin: "0.4rem 0 0", fontSize: 12, color: "var(--text-500)" }}>
-                    JSON-объект со строковыми значениями. Bearer Token будет добавлен как заголовок Authorization.
-                  </p>
-                </div>
+
+                {mcpTargetKind === "remote" && <>
+                  <div style={{ marginBottom: "1rem" }}>
+                    <label style={{ display: "block", marginBottom: "0.5rem" }}>Адрес MCP-сервера</label>
+                    <input type="url" className="input" value={mcpServerUrl} onChange={(e) => setMcpServerUrl(e.target.value)} placeholder="https://example.com/mcp" style={{ width: "100%" }} />
+                  </div>
+                  <div style={{ marginBottom: "1rem" }}>
+                    <label style={{ display: "block", marginBottom: "0.5rem" }}>Транспорт MCP</label>
+                    <select className="input" value={mcpTransport} onChange={(e) => setMcpTransport(e.target.value as MCPTransport)} style={{ width: "100%" }}>
+                      <option value="auto">Автоопределение</option>
+                      <option value="streamable_http">Streamable HTTP</option>
+                      <option value="sse">Legacy SSE</option>
+                    </select>
+                  </div>
+                  <div style={{ marginBottom: "1rem" }}>
+                    <label style={{ display: "block", marginBottom: "0.5rem" }}>Bearer Token</label>
+                    <input type="password" className="input" value={mcpBearerToken} onChange={(e) => setMcpBearerToken(e.target.value)} placeholder="Необязательно" autoComplete="off" style={{ width: "100%" }} />
+                  </div>
+                  <div style={{ marginBottom: "1rem" }}>
+                    <label style={{ display: "block", marginBottom: "0.5rem" }}>Дополнительные заголовки</label>
+                    <textarea className="input" value={mcpHeaders} onChange={(e) => setMcpHeaders(e.target.value)} placeholder={'{"X-API-Key": "value"}'} rows={3} style={{ width: "100%", resize: "vertical", fontFamily: "monospace" }} />
+                    <p style={{ margin: "0.4rem 0 0", fontSize: 12, color: "var(--text-500)" }}>JSON-объект со строковыми значениями. Bearer Token будет добавлен как Authorization.</p>
+                  </div>
+                  <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "1rem" }}>
+                    <input type="checkbox" checked={mcpVerifyTls} onChange={(e) => setMcpVerifyTls(e.target.checked)} />
+                    Проверять TLS-сертификат сервера
+                  </label>
+                </>}
+
+                {mcpTargetKind === "repository" && <>
+                  <div style={{ marginBottom: "1rem" }}>
+                    <label style={{ display: "block", marginBottom: "0.5rem" }}>URL Git-репозитория</label>
+                    <input type="url" className="input" value={mcpGitRepoUrl} onChange={(e) => setMcpGitRepoUrl(e.target.value)} placeholder="https://github.com/org/mcp-server.git" style={{ width: "100%" }} />
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem", marginBottom: "1rem" }}>
+                    <div><label style={{ display: "block", marginBottom: "0.5rem" }}>Ветка, тег или commit</label><input className="input" value={mcpGitRef} onChange={(e) => setMcpGitRef(e.target.value)} style={{ width: "100%" }} /></div>
+                    <div><label style={{ display: "block", marginBottom: "0.5rem" }}>Путь к конфигурации</label><input className="input" value={mcpConfigPath} onChange={(e) => setMcpConfigPath(e.target.value)} placeholder="mcp_config.json" style={{ width: "100%" }} /></div>
+                  </div>
+                  <div style={{ marginBottom: "1rem" }}>
+                    <label style={{ display: "block", marginBottom: "0.5rem" }}>Токен доступа к Git</label>
+                    <input type="password" className="input" value={mcpGitAccessToken} onChange={(e) => setMcpGitAccessToken(e.target.value)} placeholder="Необязательно, для приватного репозитория" autoComplete="off" style={{ width: "100%" }} />
+                  </div>
+                  <div style={{ marginBottom: "1rem" }}>
+                    <label style={{ display: "block", marginBottom: "0.5rem" }}>Переменные окружения</label>
+                    <textarea className="input" value={mcpRepoEnv} onChange={(e) => setMcpRepoEnv(e.target.value)} placeholder={'{"API_KEY": "value"}'} rows={3} style={{ width: "100%", resize: "vertical", fontFamily: "monospace" }} />
+                  </div>
+                </>}
+
+                {mcpTargetKind === "bundle" && <>
+                  <div style={{ marginBottom: "1rem" }}>
+                    <label style={{ display: "block", marginBottom: "0.5rem" }}>Как получить MCPB</label>
+                    <select className="input" value={mcpBundleSource} onChange={(e) => { setMcpBundleSource(e.target.value as "upload" | "url"); setMcpArtifact(null); }} style={{ width: "100%" }}>
+                      <option value="upload">Загрузить локальный файл</option>
+                      <option value="url">Скачать по HTTPS URI</option>
+                    </select>
+                  </div>
+                  {mcpBundleSource === "upload" ? (
+                    <div style={{ marginBottom: "1rem" }}><input type="file" accept=".mcpb,application/zip" onChange={(e) => { setMcpBundleFile(e.target.files?.[0] ?? null); setMcpArtifact(null); }} /></div>
+                  ) : <>
+                    <div style={{ marginBottom: "1rem" }}><label style={{ display: "block", marginBottom: "0.5rem" }}>HTTPS URI архива</label><input type="url" className="input" value={mcpBundleUrl} onChange={(e) => { setMcpBundleUrl(e.target.value); setMcpArtifact(null); }} placeholder="https://example.com/server.mcpb" style={{ width: "100%" }} /></div>
+                    <div style={{ marginBottom: "1rem" }}><label style={{ display: "block", marginBottom: "0.5rem" }}>Ожидаемый SHA-256</label><input className="input" value={mcpBundleExpectedSha} onChange={(e) => { setMcpBundleExpectedSha(e.target.value); setMcpArtifact(null); }} placeholder="Необязательно" style={{ width: "100%", fontFamily: "monospace" }} /></div>
+                  </>}
+                  <button type="button" className="btn btn-secondary" onClick={handleUploadMcpBundle} disabled={mcpArtifactUploading} style={{ marginBottom: "1rem" }}>
+                    {mcpArtifactUploading ? "Загрузка…" : "Загрузить и проверить MCPB"}
+                  </button>
+                  {mcpArtifactError && <p style={{ color: "var(--danger)", margin: "0 0 1rem" }}>{mcpArtifactError}</p>}
+                  {mcpArtifact && <p style={{ margin: "0 0 1rem", color: "var(--success)" }}>Загружен {mcpArtifact.original_filename} ({Math.ceil(mcpArtifact.size_bytes / 1024)} КиБ), SHA-256: <code>{mcpArtifact.sha256}</code></p>}
+                  <div style={{ marginBottom: "1rem" }}>
+                    <label style={{ display: "block", marginBottom: "0.5rem" }}>Пользовательская конфигурация MCPB</label>
+                    <textarea className="input" value={mcpBundleUserConfig} onChange={(e) => setMcpBundleUserConfig(e.target.value)} placeholder="{}" rows={3} style={{ width: "100%", resize: "vertical", fontFamily: "monospace" }} />
+                  </div>
+                </>}
                 <div style={{ marginBottom: "1rem" }}>
                   <label style={{ display: "block", marginBottom: "0.5rem" }}>
                     MCP-сканеры · выбрано: {selectedMcpScanners.length}
@@ -459,14 +569,6 @@ export function Scans() {
                     style={{ width: "100%" }}
                   />
                 </div>
-                <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "1.5rem" }}>
-                  <input
-                    type="checkbox"
-                    checked={mcpVerifyTls}
-                    onChange={(e) => setMcpVerifyTls(e.target.checked)}
-                  />
-                  Проверять TLS-сертификат сервера
-                </label>
               </>
             )}
 

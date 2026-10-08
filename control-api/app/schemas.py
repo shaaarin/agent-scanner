@@ -1,7 +1,7 @@
 from datetime import datetime
-from typing import Literal, Optional
+from typing import Annotated, Any, Literal, Optional, Union
 
-from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator, model_validator
 
 from app.models import (
     EventDirection,
@@ -72,19 +72,11 @@ class AgentConfigUpdate(BaseModel):
     langgraph_config: Optional[dict] = None
 
 
-class MCPScanConfig(BaseModel):
-    """Connection settings consumed by the future scanner-mcp service.
-
-    An empty scanner_ids list means "run every scanner available in the
-    service". This keeps scan creation independent from the scanner catalogue
-    while that service is being implemented.
-    """
-
+class MCPRemoteTarget(BaseModel):
+    kind: Literal["remote"]
     server_url: HttpUrl
     transport: Literal["auto", "streamable_http", "sse"] = "auto"
     headers: dict[str, str] = Field(default_factory=dict)
-    scanner_ids: list[str] = Field(default_factory=list)
-    timeout_seconds: int = Field(default=30, ge=1, le=300)
     verify_tls: bool = True
 
     @field_validator("headers")
@@ -98,10 +90,104 @@ class MCPScanConfig(BaseModel):
             normalized[clean_name] = header_value
         return normalized
 
+
+class MCPRepositoryTarget(BaseModel):
+    kind: Literal["repository"]
+    git_repo_url: str = Field(min_length=1)
+    git_ref: str = Field(default="main", min_length=1)
+    git_access_token: Optional[str] = None
+    config_path: str = Field(default="mcp_config.json", min_length=1)
+    env: dict[str, str] = Field(default_factory=dict)
+
+    @field_validator("git_repo_url", "git_ref", "config_path")
+    @classmethod
+    def strip_required_strings(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("value must not be empty")
+        return value
+
+
+class MCPBundleTarget(BaseModel):
+    kind: Literal["bundle"]
+    artifact_id: int = Field(gt=0)
+    user_config: dict[str, Any] = Field(default_factory=dict)
+
+
+MCPTarget = Annotated[
+    Union[MCPRemoteTarget, MCPRepositoryTarget, MCPBundleTarget],
+    Field(discriminator="kind"),
+]
+
+
+class MCPScanConfig(BaseModel):
+    """Description of an MCP target consumed by future scan stages.
+
+    An empty scanner_ids list means "run every scanner available in the
+    service". This keeps scan creation independent from the scanner catalogue
+    while that service is being implemented.
+    """
+
+    target: MCPTarget
+    scanner_ids: list[str] = Field(default_factory=list)
+    timeout_seconds: int = Field(default=30, ge=1, le=300)
+
+    @model_validator(mode="before")
+    @classmethod
+    def upgrade_legacy_remote_config(cls, value: Any) -> Any:
+        """Accept configs created by the first remote-only UI revision."""
+        if isinstance(value, dict) and "target" not in value and "server_url" in value:
+            legacy = dict(value)
+            target = {
+                "kind": "remote",
+                "server_url": legacy.pop("server_url"),
+                "transport": legacy.pop("transport", "auto"),
+                "headers": legacy.pop("headers", {}),
+                "verify_tls": legacy.pop("verify_tls", True),
+            }
+            legacy["target"] = target
+            return legacy
+        return value
+
     @field_validator("scanner_ids")
     @classmethod
     def normalize_scanner_ids(cls, value: list[str]) -> list[str]:
         return list(dict.fromkeys(scanner_id.strip() for scanner_id in value if scanner_id.strip()))
+
+
+class MCPArtifactFromURL(BaseModel):
+    url: HttpUrl
+    expected_sha256: Optional[str] = None
+
+    @field_validator("url")
+    @classmethod
+    def require_https(cls, value: HttpUrl) -> HttpUrl:
+        if value.scheme != "https":
+            raise ValueError("разрешены только HTTPS URI")
+        return value
+
+    @field_validator("expected_sha256")
+    @classmethod
+    def validate_expected_sha256(cls, value: Optional[str]) -> Optional[str]:
+        if value is None or not value.strip():
+            return None
+        value = value.strip().lower()
+        if len(value) != 64 or any(char not in "0123456789abcdef" for char in value):
+            raise ValueError("expected_sha256 должен содержать 64 hex-символа")
+        return value
+
+
+class MCPArtifactRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    original_filename: str
+    source_type: str
+    source_url: Optional[str]
+    sha256: str
+    size_bytes: int
+    manifest: dict
+    created_at: datetime
 
 
 class ScanUpdate(BaseModel):

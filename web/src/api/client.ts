@@ -1,9 +1,10 @@
 function makeClient(baseUrl: string) {
   async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
+    const isFormData = options.body instanceof FormData;
     const res = await fetch(`${baseUrl}${path}`, {
       ...options,
       headers: {
-        "Content-Type": "application/json",
+        ...(!isFormData ? { "Content-Type": "application/json" } : {}),
         ...(options.headers ?? {}),
       },
     });
@@ -29,6 +30,8 @@ function makeClient(baseUrl: string) {
     get: <T>(path: string) => request<T>(path),
     post: <T>(path: string, body: unknown) =>
       request<T>(path, { method: "POST", body: JSON.stringify(body) }),
+    postForm: <T>(path: string, body: FormData) =>
+      request<T>(path, { method: "POST", body }),
     put: <T>(path: string, body: unknown) =>
       request<T>(path, { method: "PUT", body: JSON.stringify(body) }),
     patch: <T>(path: string, body: unknown) =>
