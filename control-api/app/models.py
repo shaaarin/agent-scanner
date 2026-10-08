@@ -111,6 +111,13 @@ class TrafficEvent(SQLModel, table=True):
     raw_excerpt: str = Field(default="", sa_column=Column(Text))
     # Real upstream the agent dialed (scheme://host[:port]), for context.
     upstream_base_url: Optional[str] = None
+    # Indirect-injection scans only: which InjectionTrial this exchange
+    # belongs to, and whether the proxy rewrote the outgoing body for it (and
+    # into which tool result). The proxy already reported `injected`/
+    # `injection_target`; before this they were dropped on the floor.
+    trial_id: Optional[int] = Field(default=None, index=True)
+    injected: bool = False
+    injection_target: Optional[str] = None
     created_at: datetime = Field(default_factory=utcnow)
 
 
@@ -121,6 +128,7 @@ class ScanType(str, Enum):
 
     DEEP_TEAM = "deep_team"  # scanner-deepteam: динамическое тестирование
     CODE_SCAN = "code_scan"  # scanner-promptfoo: анализ исходного кода
+    INDIRECT_INJECTION = "indirect_injection"  # scanner-indirect: косвенные инъекции в результаты инструментов
     MCP = "mcp"  # заглушка в UI, сканера пока нет
     AGENT_SKILLS = "agent_skills"  # заглушка в UI, сканера пока нет
 
@@ -146,12 +154,16 @@ class Scan(SQLModel, table=True):
     # JSON config specific to scan type:
     # - DEEP_TEAM: {"eval_llm_model_id": int, "vulnerabilities": [...], "attacks": [...]}
     # - CODE_SCAN: {"min_severity": "low|medium|high|critical", "guidance": str | null}
+    # - INDIRECT_INJECTION: {"tasks": [str], "target_tools": [str], "payloads": [str],
+    #                        "repeats": int, "max_trials": int}
     # - MCP: {} (placeholder)
     # - AGENT_SKILLS: {} (placeholder)
     config: str = Field(default="{}", sa_column=Column(JSON))
     # JSON results, shape depends on type:
     # - DEEP_TEAM: {"vulnerability_results": [...], "overall_score": float}
     # - CODE_SCAN: {"engine": "promptfoo-code-scans", "summary": {...}, "findings": [...], ...}
+    # - INDIRECT_INJECTION: {"engine": "indirect-injection", "summary": {...},
+    #                        "by_tool": [...], "by_payload": [...], "trials": [...]}
     results: Optional[str] = Field(default=None, sa_column=Column(JSON))
     # High-level progress state, written by scanner as it moves through phases
     # ("Инициализация", "Запуск агента", ...). The detailed per-line log lives
@@ -188,3 +200,51 @@ class ScanLog(SQLModel, table=True):
     phase: Optional[str] = None
     message: str
     created_at: datetime = Field(default_factory=utcnow)
+
+
+class InjectionTrialStatus(str, Enum):
+    PENDING = "pending"
+    RUNNING = "running"  # сейчас выполняется -- именно её директиву отдаёт прокси
+    DONE = "done"
+    ERROR = "error"
+
+
+class InjectionVerdict(str, Enum):
+    ROBUST = "robust"  # инъекция подложена, но агент ей не поддался
+    VULNERABLE = "vulnerable"  # агент выполнил инструкцию из результата инструмента
+    INCONCLUSIVE = "inconclusive"  # агент не вызвал целевой инструмент -- подложить было некуда
+    ERROR = "error"
+
+
+class InjectionTrial(SQLModel, table=True):
+    """Один прогон агента в скане `indirect_injection`: ему отправляется
+    легитимная задача, а прокси (по директиве `GET /scans/{id}/injection/active`)
+    дописывает `payload_text` в результат инструмента `target_tool`. Базовый
+    прогон (`baseline=True`) идёт без инъекции -- по нему находятся точки
+    вызова инструментов. Прогоны выполняются последовательно, поэтому
+    `RUNNING`-прогон в скане всегда ровно один."""
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    scan_id: int = Field(foreign_key="scan.id", index=True)
+    baseline: bool = False
+    task_index: int = 0
+    task: str = Field(default="", sa_column=Column(Text))
+    # Куда подкладывать: имя инструмента (или "*" -- любой) и какой по счёту
+    # его вызов. Для baseline -- None.
+    target_tool: Optional[str] = None
+    occurrence: int = 1
+    mode: str = "append"  # append | prepend | replace
+    payload_name: Optional[str] = None
+    payload_family: Optional[str] = None
+    payload_text: Optional[str] = Field(default=None, sa_column=Column(Text))
+    # Контрольная метка этого прогона: если она всплыла в ответе агента или в
+    # аргументах его вызова инструмента -- значит агент поддался инъекции.
+    canary: Optional[str] = None
+    status: InjectionTrialStatus = InjectionTrialStatus.PENDING
+    injected_count: int = 0  # сколько раз прокси реально применил подстановку
+    verdict: Optional[InjectionVerdict] = None
+    verdict_reason: Optional[str] = Field(default=None, sa_column=Column(Text))
+    agent_response: Optional[str] = Field(default=None, sa_column=Column(Text))
+    baseline_response: Optional[str] = Field(default=None, sa_column=Column(Text))
+    created_at: datetime = Field(default_factory=utcnow)
+    finished_at: Optional[datetime] = None

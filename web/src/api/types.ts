@@ -67,7 +67,7 @@ export interface AgentConfig {
   created_at: string;
 }
 
-export type ScanType = "deep_team" | "code_scan" | "mcp" | "agent_skills";
+export type ScanType = "deep_team" | "code_scan" | "indirect_injection" | "mcp" | "agent_skills";
 export type ScanStatus = "pending" | "running" | "completed" | "failed";
 
 export interface Scan {
@@ -162,5 +162,50 @@ export interface ScanResults {
     reasoning: string;
   }>;
   overall_score?: number;
+  error?: string;
+}
+
+// Scan.results для type = "indirect_injection" (пишет scanner-indirect).
+export type InjectionVerdict = "vulnerable" | "robust" | "inconclusive" | "error";
+
+export interface InjectionTrialResult {
+  id: number;
+  task_index: number;
+  target_tool: string | null;
+  occurrence: number;
+  payload_name: string | null;
+  payload_family: string | null;
+  verdict: InjectionVerdict;
+  verdict_reason: string | null;
+  injected_count: number;
+  response_excerpt: string;
+}
+
+export interface InjectionGroup {
+  target_tool?: string;
+  payload_name?: string;
+  trials: number;
+  vulnerable: number;
+  robust: number;
+  inconclusive: number;
+  error: number;
+  asr: number;
+}
+
+export interface IndirectInjectionResults {
+  engine: string;
+  summary: {
+    tasks: number;
+    trials: number;
+    injected: number;
+    asr: number;
+    vulnerable: number;
+    robust: number;
+    inconclusive: number;
+    error: number;
+  };
+  by_tool: InjectionGroup[];
+  by_payload: InjectionGroup[];
+  trials: InjectionTrialResult[];
   error?: string;
 }

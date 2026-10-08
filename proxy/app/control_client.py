@@ -29,6 +29,20 @@ async def get_active_scan(session_id: str) -> Optional[dict]:
     return scan
 
 
+async def get_active_injection(scan_id: int) -> Optional[dict]:
+    """Директива косвенной инъекции для текущего прогона -- БЕЗ кэша: активный
+    прогон меняется от запроса к запросу, и устаревшая директива подложила бы
+    инъекцию не в тот прогон."""
+    try:
+        resp = await _client.get(f"/scans/{scan_id}/injection/active")
+        if resp.status_code != 200:
+            return None
+        return resp.json()
+    except httpx.HTTPError as exc:
+        print(f"[control_client] failed to fetch active injection: {exc}")
+        return None
+
+
 async def get_agent_config(scan_id: int) -> Optional[dict]:
     try:
         resp = await _client.get(f"/scans/{scan_id}/agent-config")

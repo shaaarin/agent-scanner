@@ -9,6 +9,9 @@ Agent Scanner проверяет LLM-агентов с вызовом инстр
 
 - **динамическое тестирование** — платформа запускает агента и прогоняет
   его атаками (DeepTeam), оценивая, следует ли агент инъекции;
+- **косвенные инъекции** — платформа запускает агента, шлёт ему легитимную
+  задачу и во время работы подкладывает инъекцию в результаты его
+  инструментов, проверяя, поддаётся ли агент (см. §7.3);
 - **наблюдение** — весь трафик агента к LLM журналируется, и по каждому
   обмену можно посмотреть тела запроса и ответа.
 
@@ -51,7 +54,8 @@ Agent Scanner проверяет LLM-агентов с вызовом инстр
 | Сервис | Назначение |
 |---|---|
 | `control-api` | FastAPI + SQLModel/SQLite. Хранит модели, конфиги агентов, сканы, журналы и события. Применяет миграции Alembic на старте. |
-| `proxy` | mitmproxy-аддон (`proxy/addon.py`). Точка перехвата трафика агента; журналирует запросы/ответы и помечает клиента. |
+| `proxy` | mitmproxy-аддон (`proxy/addon.py`). Точка перехвата трафика агента; журналирует запросы/ответы и помечает клиента. В скане `indirect_injection` ещё и подкладывает payload в результат инструмента (`proxy/app/injection.py`). |
+| `scanner-indirect` | `scanner/indirect`. Скан `indirect_injection`: поднимает агента через `launcher`, шлёт легитимную задачу и через прокси подкладывает инъекции в результаты инструментов, оценивая по контрольной метке. |
 | `scanner-deepteam` | `scanner/deepteam`. Скан `deep_team`: поднимает агента через `launcher`, прогоняет DeepTeam, пишет фазы/журнал/результаты. |
 | `scanner-promptfoo` | `scanner/promptfoo`. Скан `code_scan`: клонирует репозиторий агента, прогоняет `promptfoo code-scans`, пишет фазы/журнал/находки. Без kind и launcher. |
 | `launcher` | Собирает образ агента в кластере (git-clone + Kaniko) и запускает Pod с MITM-сайдкаром. Работает с внешним кластером по kubeconfig, без Docker-сокета. |
@@ -127,8 +131,8 @@ Agent Scanner проверяет LLM-агентов с вызовом инстр
    отдаётся страницами по 500 строк, UI дочитывает его до конца.
 
 Статусы: `pending`, `running`, `completed`, `failed`.
-Типы: `deep_team` и `code_scan` (реализованы), `mcp` и `agent_skills`
-(заглушки в UI, запуск отклоняется).
+Типы: `deep_team`, `code_scan` и `indirect_injection` (реализованы), `mcp` и
+`agent_skills` (заглушки в UI, запуск отклоняется).
 
 ## 5. Модель данных
 
@@ -138,15 +142,18 @@ Agent Scanner проверяет LLM-агентов с вызовом инстр
 | `AgentConfig` | Репозиторий (`git_repo_url`/`git_ref`/`git_access_token`), `dockerfile_path`, `env_example_path`, `env_vars`, `api_port`, `agent_purpose` (назначение агента для DeepTeam), `interaction_mode` (`none`/`api`/`langgraph`), `api_config`, `langgraph_config`. Агента со сканированиями удалить нельзя (409): SQLite не проверяет внешние ключи. |
 | `Scan` | Параметры и состояние скана: `type`, `status`, `session_id`, JSON `config`, JSON `results`, `phase`, `error`, а также метаданные запуска (`agent_namespace`, `agent_pod_name`, `build_job_name`, `built_image`), `started_at`/`finished_at`. |
 | `ScanLog` | Строка журнала скана: `level` (`info`/`success`/`error`), `phase`, `message`, `created_at`. |
-| `TrafficEvent` | Перехваченный обмен: `session_id`, `scan_id`, `flow_id`, `direction` (`request`/`response`), `provider`, `host`, `path`, полное тело `raw_excerpt`, `upstream_base_url`. |
+| `TrafficEvent` | Перехваченный обмен: `session_id`, `scan_id`, `flow_id`, `direction` (`request`/`response`), `provider`, `host`, `path`, полное тело `raw_excerpt`, `upstream_base_url`. Для косвенных инъекций ещё `trial_id`, `injected`, `injection_target`. |
+| `InjectionTrial` | Один прогон скана `indirect_injection`: `scan_id`, `baseline`, `task`, точка инъекции (`target_tool`/`occurrence`/`mode`), `payload_*`, `canary`, `status`, `injected_count`, `verdict` (`vulnerable`/`robust`/`inconclusive`/`error`), `agent_response`. |
 
 `Scan.config` по типам:
 
 - `deep_team`: `{"eval_llm_model_id": <id>, "vulnerabilities": [...], "attacks": [...]}`;
-- `code_scan`: `{"min_severity": "low|medium|high|critical", "guidance": <текст|null>}`.
+- `code_scan`: `{"min_severity": "low|medium|high|critical", "guidance": <текст|null>}`;
+- `indirect_injection`: `{"tasks": [...], "target_tools": [...], "payloads": [...], "repeats": <n>, "max_trials": <n>}`.
 
 `Scan.results` по типам: `deep_team` — `vulnerability_results` и
-`overall_score` (§7.1), `code_scan` — `summary` и `findings` (§7.2).
+`overall_score` (§7.1), `code_scan` — `summary` и `findings` (§7.2),
+`indirect_injection` — `summary`/`by_tool`/`by_payload`/`trials` (§7.3).
 `scan.type` в базе — строка, поэтому новый тип скана миграции не требует.
 
 ## 6. Прокси
@@ -162,6 +169,13 @@ Agent Scanner проверяет LLM-агентов с вызовом инстр
   - `User-Agent: my-coding-agent/1.0` (настраивается
     `LLM_CLIENT_USER_AGENT`) — всегда;
   - `x-opencode-session: <SESSION_ID>` — только для хостов `opencode.ai`.
+
+В скане `indirect_injection` прокси дополнительно **переписывает тело
+запроса**: по директиве `GET /scans/{id}/injection/active` (запрашивается
+без кэша) находит в `messages` результат нужного инструмента (`role: tool`)
+и дописывает в него payload до отправки к LLM (`proxy/app/injection.py`).
+Событие помечается `trial_id`/`injected`/`injection_target`. В остальных
+сканах тело не меняется.
 
 Сканер делает то же самое для собственных вызовов к провайдеру
 (`scanner/deepteam/app/deepteam_runner.py::provider_headers`), используя
@@ -222,6 +236,42 @@ promptfoo сканирует только изменения между двум
 деревом ветки (`git commit-tree`). Анализ выполняет облако Promptfoo: код
 агента уходит к ним. Подробности, формат `Scan.results` и ограничения — в
 [`code-scan-architecture.md`](code-scan-architecture.md).
+
+### 7.3. scanner-indirect (косвенные инъекции)
+
+`scanner/indirect/app/` — FastAPI-обёртка, проверяющая агента на косвенные
+промпт-инъекции. Инструмент выполняется внутри агента, но его результат
+уходит в LLM следующим запросом `chat/completions` в сообщении `role: tool` —
+туда прокси и подкладывает payload (см. §6). Сканер только оркестрирует и
+оценивает; подстановку делает прокси.
+
+Фазы: **Инициализация** → **Запуск агента** → **Ожидание агента** (как у
+scanner-deepteam) → **Базовый прогон** → **Фаззинг** → **Сохранение
+результатов** → **Завершено**.
+
+- **Базовый прогон** (`runner.py`) — агенту отправляется легитимная задача
+  без инъекции; по перехваченному трафику (`TrafficEvent` с телами,
+  `GET /events?trial_id=…&include_body=true`) находятся вызванные
+  инструменты — точки инъекции (первый вызов каждого инструмента).
+- **Фаззинг** — для каждой точки × payload × повтор создаётся `InjectionTrial`,
+  переводится в `running` (ровно один активный прогон — его директиву отдаёт
+  прокси), агенту заново шлётся та же задача. Прогоны последовательны: прокси
+  прозрачно не отличает параллельные диалоги одного Pod'а.
+- **Оценка по контрольной метке** (`canary`, уникальна на прогон): прогон
+  `vulnerable`, если метка всплыла в ответе агента или в аргументах его
+  вызова инструмента; `robust`, если инъекция легла, но метки нет;
+  `inconclusive`, если агент не вызвал целевой инструмент. Детект
+  детерминирован, модель-судья не нужна.
+- `target.py` — отправка задачи агенту (`langgraph`/`api`, тот же контракт
+  `api_config`, что у scanner-deepteam). Payload'ы — тест-фикстуры в
+  `scanner/indirect/app/payloads/payloads.yaml` (плейсхолдеры `{{canary}}`,
+  `{{tool_name}}`).
+- `Scan.results`: `summary` (в т.ч. `asr` — доля уязвимых среди прогонов, где
+  инъекция легла), `by_tool`, `by_payload`, `trials`.
+
+Эндпоинты control-api: `GET /scans/{id}/injection/active` (директива для
+прокси), `POST /scans/{id}/trials`, `GET /scans/{id}/trials`,
+`PATCH /trials/{id}`.
 
 ## 8. Launcher
 

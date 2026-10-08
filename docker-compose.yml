@@ -18,6 +18,7 @@ services:
       # Сканер выбирается по типу скана, см. control-api/app/api/scans.py.
       SCANNER_DEEPTEAM_URL: http://scanner-deepteam:8000
       SCANNER_PROMPTFOO_URL: http://scanner-promptfoo:8000
+      SCANNER_INDIRECT_URL: http://scanner-indirect:8000
       LIBRARY_DIR: /library
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
@@ -90,6 +91,21 @@ services:
       PROMPTFOO_DISABLE_TELEMETRY: "1"
       PROMPTFOO_DISABLE_UPDATE: "1"
       SCAN_CODE_TIMEOUT: "1800"
+    depends_on:
+      control-api:
+        condition: service_healthy
+
+  # Косвенные инъекции: поднимает агента через launcher, отправляет ему
+  # легитимную задачу и через прокси подкладывает инъекцию в результаты его
+  # инструментов. Нужен kind (как scanner-deepteam).
+  scanner-indirect:
+    build: ./scanner/indirect
+    environment:
+      CONTROL_API_URL: http://control-api:8000
+      LAUNCHER_URL: http://launcher:8000
+    networks:
+      - default
+      - kind
     depends_on:
       control-api:
         condition: service_healthy

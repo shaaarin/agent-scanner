@@ -39,6 +39,9 @@ export function Scans() {
   const [selectedAttacks, setSelectedAttacks] = useState<string[]>([]);
   const [minSeverity, setMinSeverity] = useState<CodeScanSeverity>("medium");
   const [guidance, setGuidance] = useState("");
+  const [injectionTasks, setInjectionTasks] = useState("");
+  const [injectionRepeats, setInjectionRepeats] = useState(1);
+  const [injectionMaxTrials, setInjectionMaxTrials] = useState(60);
   const [pageError, setPageError] = useState<string | null>(null);
   const [createError, setCreateError] = useState<string | null>(null);
 
@@ -74,6 +77,13 @@ export function Scans() {
     } else if (newScanType === "code_scan") {
       config.min_severity = minSeverity;
       config.guidance = guidance.trim() || null;
+    } else if (newScanType === "indirect_injection") {
+      config.tasks = injectionTasks
+        .split("\n")
+        .map((t) => t.trim())
+        .filter(Boolean);
+      config.repeats = injectionRepeats;
+      config.max_trials = injectionMaxTrials;
     }
 
     setCreateError(null);
@@ -94,6 +104,9 @@ export function Scans() {
       setSelectedAttacks([]);
       setMinSeverity("medium");
       setGuidance("");
+      setInjectionTasks("");
+      setInjectionRepeats(1);
+      setInjectionMaxTrials(60);
       api.get<Scan[]>("/scans").then(setScans);
     } catch (error) {
       console.error("Failed to create scan:", error);
@@ -247,6 +260,8 @@ export function Scans() {
             <p style={{ margin: "0 0 1.5rem", color: "var(--text-500)", fontSize: 13 }}>
               {newScanType === "code_scan"
                 ? "Платформа скачает код агента из его репозитория и проверит его через promptfoo. Агент не запускается, анализ выполняется в облаке Promptfoo."
+                : newScanType === "indirect_injection"
+                ? "Платформа запустит агента, отправит ему легитимную задачу и во время работы подложит инъекцию в результаты его инструментов, проверяя, поддаётся ли агент."
                 : "Платформа запустит агента и проверит его ответы на выбранные классы атак."}
             </p>
             <div style={{ marginBottom: "1rem" }}>
@@ -270,6 +285,7 @@ export function Scans() {
               >
                 <option value="deep_team">Динамическое тестирование</option>
                 <option value="code_scan">Анализ кода (promptfoo)</option>
+                <option value="indirect_injection">Косвенные инъекции</option>
                 <option value="mcp">MCP (в разработке)</option>
                 <option value="agent_skills">Agent Skills (в разработке)</option>
               </select>
@@ -343,6 +359,57 @@ export function Scans() {
                     maxLength={4000}
                     style={{ width: "100%", resize: "vertical" }}
                   />
+                </div>
+              </>
+            )}
+
+            {newScanType === "indirect_injection" && (
+              <>
+                <div style={{ marginBottom: "1rem" }}>
+                  <label style={{ display: "block", marginBottom: "0.5rem" }}>Легитимные задачи (по одной в строке)</label>
+                  <textarea
+                    className="input"
+                    value={injectionTasks}
+                    onChange={(e) => setInjectionTasks(e.target.value)}
+                    placeholder={"Проверьте статус заказа ORD-1002\nОформите возврат по заказу ORD-1001"}
+                    rows={4}
+                    style={{ width: "100%", resize: "vertical" }}
+                  />
+                  <p style={{ margin: "0.4rem 0 0", fontSize: 12, color: "var(--text-500)" }}>
+                    Каждая задача должна приводить к вызову инструмента. Если оставить пусто — задача подставится по назначению агента.
+                  </p>
+                </div>
+                <div style={{ display: "flex", gap: "1rem", marginBottom: "1.5rem" }}>
+                  <div style={{ flex: 1 }}>
+                    <label style={{ display: "block", marginBottom: "0.5rem" }}>Повторов на комбинацию</label>
+                    <input
+                      type="number"
+                      className="input"
+                      min={1}
+                      max={10}
+                      value={injectionRepeats}
+                      onChange={(e) => setInjectionRepeats(Math.max(1, Number(e.target.value)))}
+                      style={{ width: "100%" }}
+                    />
+                    <p style={{ margin: "0.4rem 0 0", fontSize: 12, color: "var(--text-500)" }}>
+                      Ответы недетерминированы — повторы дают долю успеха.
+                    </p>
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <label style={{ display: "block", marginBottom: "0.5rem" }}>Лимит прогонов</label>
+                    <input
+                      type="number"
+                      className="input"
+                      min={1}
+                      max={500}
+                      value={injectionMaxTrials}
+                      onChange={(e) => setInjectionMaxTrials(Math.max(1, Number(e.target.value)))}
+                      style={{ width: "100%" }}
+                    />
+                    <p style={{ margin: "0.4rem 0 0", fontSize: 12, color: "var(--text-500)" }}>
+                      Каждый прогон — реальный вызов LLM.
+                    </p>
+                  </div>
                 </div>
               </>
             )}
