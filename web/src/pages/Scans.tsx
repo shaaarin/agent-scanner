@@ -30,10 +30,13 @@ const DEEPTEAM_ATTACKS = [
 // Идентификаторы должны совпадать с реестром scanner-mcp. Пока реализации
 // сканеров не подключены, список пуст; scanner_ids: [] означает «запустить
 // все доступные проверки».
-const MCP_SCANNERS: string[] = [];
+
 
 export function Scans() {
   const navigate = useNavigate();
+  const [mcpEngines, setMcpEngines] = useState<{id: string; name: string; available: boolean; modes: string[]}[]>([]);
+  useEffect(() => { api.get<typeof mcpEngines>("/mcp-scanners").then(setMcpEngines).catch(() => {}); }, []);
+
   const [scans, setScans] = useState<Scan[]>([]);
   const [agentConfigs, setAgentConfigs] = useState<AgentConfig[]>([]);
   const [llmModels, setLlmModels] = useState<LLMModel[]>([]);
@@ -72,6 +75,7 @@ export function Scans() {
 
   // Модель-судья нужна только динамическому тестированию (DeepTeam).
   const needsLlmModel = newScanType === "deep_team";
+  const MCP_SCANNERS = mcpEngines.filter(e => e.available && !["snyk"].includes(e.id) && e.modes.includes(mcpTargetKind === "bundle" ? "repository" : mcpTargetKind)).map(e => e.id);
   const needsAgent = newScanType !== "mcp";
   const hasMcpTarget = mcpTargetKind === "remote"
     ? Boolean(mcpServerUrl.trim())
@@ -172,7 +176,7 @@ export function Scans() {
           }
           config.target = { kind: "bundle", artifact_id: mcpArtifact.id, user_config: userConfig };
         }
-        config.scanner_ids = selectedMcpScanners;
+        config.scanner_ids = selectedMcpScanners.filter(id => MCP_SCANNERS.includes(id));
         config.timeout_seconds = mcpTimeoutSeconds;
       }
 
@@ -385,12 +389,12 @@ export function Scans() {
               <select
                 className="input"
                 value={newScanType}
-                onChange={(e) => setNewScanType(e.target.value as ScanType)}
+                onChange={(e) => { setNewScanType(e.target.value as ScanType); setSelectedMcpScanners([]); }}
                 style={{ width: "100%" }}
               >
                 <option value="deep_team">Динамическое тестирование</option>
                 <option value="code_scan">Анализ кода (promptfoo)</option>
-                <option value="mcp">MCP (в разработке)</option>
+                <option value="mcp">MCP · статическое и динамическое тестирование</option>
                 <option value="agent_skills">Agent Skills (в разработке)</option>
               </select>
             </div>
@@ -551,7 +555,7 @@ export function Scans() {
                             }}
                             style={{ marginRight: "0.5rem" }}
                           />
-                          {scannerId}
+                          {mcpEngines.find(e => e.id === scannerId)?.name ?? scannerId}
                         </label>
                       ))
                     )}

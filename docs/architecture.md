@@ -127,8 +127,8 @@ Agent Scanner проверяет LLM-агентов с вызовом инстр
    отдаётся страницами по 500 строк, UI дочитывает его до конца.
 
 Статусы: `pending`, `running`, `completed`, `failed`.
-Типы: `deep_team` и `code_scan` (реализованы), `mcp` и `agent_skills`
-(заглушки в UI, запуск отклоняется).
+Типы: `deep_team`, `code_scan` и `mcp` реализованы; `agent_skills` пока отклоняется.
+MCP выполняет координатор и отдельные контейнеры движков; детали — [mcp-testing.md](mcp-testing.md).
 
 ## 5. Модель данных
 
@@ -145,14 +145,14 @@ Agent Scanner проверяет LLM-агентов с вызовом инстр
 
 - `deep_team`: `{"eval_llm_model_id": <id>, "vulnerabilities": [...], "attacks": [...]}`;
 - `code_scan`: `{"min_severity": "low|medium|high|critical", "guidance": <текст|null>}`.
-- `mcp`: `{"target": {...}, "scanner_ids": [...], "timeout_seconds": 30}`. `target.kind` принимает `remote` (`server_url`, `transport`, `headers`, `verify_tls`), `repository` (`git_repo_url`, `git_ref`, `git_access_token`, `config_path`, `env`) или `bundle` (`artifact_id`, `user_config`). Пустой `scanner_ids` означает все доступные проверки. Токены, заголовки и переменные окружения хранятся в открытом виде в рамках принятого техдолга MVP.
+- `mcp`: `{"target": {...}, "scanner_ids": [...], "timeout_seconds": 30}`. `target.kind` принимает `remote` (`server_url`, `transport`, `headers`, `verify_tls`), `repository` (`git_repo_url`, `git_ref`, `git_access_token`, `config_path`, `env`) или `bundle` (`artifact_id`, `user_config`). Пустой `scanner_ids` выбирает локальный набор по типу цели (без Snyk). Дополнительно поддержаны source/snapshot, allow_cloud, allow_tool_calls и probes. Токены, заголовки и переменные окружения хранятся в открытом виде в рамках принятого техдолга MVP.
 
 MCPB загружается через `POST /mcp-artifacts/upload` либо немедленно
 материализуется из публичного HTTPS URI через `POST /mcp-artifacts/from-url`.
 API ограничивает размер, число файлов и распакованный объём, запрещает
 небезопасные пути и symlink, проверяет корневой `manifest.json`; URI не может
 разрешаться во внутренний/loopback адрес. Архив не распаковывается и не
-исполняется на этом этапе. Для будущего сканера доступны метаданные и
+исполняется на этом этапе. Для MCP SAST доступны метаданные и
 `GET /mcp-artifacts/{id}/content`.
 
 `Scan.results` по типам: `deep_team` — `vulnerability_results` и

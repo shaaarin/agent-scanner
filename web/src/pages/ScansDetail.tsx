@@ -6,6 +6,8 @@ import { SCAN_PHASES, scanTypeLabel } from "../api/scanTypes";
 import { PageHeader } from "../components/PageHeader";
 import { CodeScanResults } from "../components/CodeScanResults";
 
+import { MCPResults, type MCPResultData } from "../components/MCPResults";
+
 const TERMINAL_STATUSES = ["completed", "failed"];
 const LOG_PAGE_SIZE = 500;
 
@@ -119,7 +121,7 @@ export function ScansDetail() {
     return <div>Загрузка сканирования…</div>;
   }
 
-  if (scan.type === "mcp" || scan.type === "agent_skills") {
+  if (scan.type === "agent_skills") {
     return (
       <div>
       <PageHeader
@@ -282,7 +284,7 @@ export function ScansDetail() {
             Сканирование ещё не запускалось
           </p>
           <p style={{ color: "var(--text-500)", fontSize: 13, margin: "0.6rem 0 0" }}>
-            {scan.type === "code_scan"
+            {scan.type === "mcp" ? "Платформа выполнит выбранный MCP-сканер с параметрами этого теста." : scan.type === "code_scan"
               ? "Платформа скачает код агента и проверит его через promptfoo. Агент при этом не запускается."
               : "Платформа соберёт агента, поднимет его и проверит ответы на выбранные атаки."}
           </p>
@@ -303,7 +305,9 @@ export function ScansDetail() {
         <CodeScanResults results={results as unknown as CodeScanResultsData} />
       )}
 
-      {results && scan.type !== "code_scan" &&
+      {results && scan.type === "mcp" && <MCPResults results={results as unknown as MCPResultData} />}
+
+      {results && scan.type !== "code_scan" && scan.type !== "mcp" &&
         (scan.status === "completed" || (scan.status === "failed" && (results.vulnerability_results?.length ?? 0) > 0)) && (
         <div className="card" style={{ padding: "2rem", marginTop: scan.status === "failed" ? "2rem" : undefined }}>
           <h3 style={{ marginBottom: "1.5rem" }}>{scan.status === "failed" ? "Кейсы" : "Результаты"}</h3>

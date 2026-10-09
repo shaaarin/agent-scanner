@@ -1,0 +1,84 @@
+rules:
+  - id: mcp.python.tool-eval
+    languages: [python]
+    severity: ERROR
+    message: "MCP tool: eval/exec может выполнить пользовательский код. Замените фиксированной операцией и проверяйте аргументы."
+    metadata: {category: security, cwe: CWE-95, confidence: HIGH}
+    patterns:
+      - pattern-inside: |
+          @$MCP.tool(...)
+          def $F(...):
+              ...
+      - pattern-either:
+          - pattern: eval(...)
+          - pattern: exec(...)
+  - id: mcp.python.tool-shell
+    languages: [python]
+    severity: ERROR
+    message: "MCP tool: shell=True/os.system создаёт риск командной инъекции. Используйте фиксированную команду и список аргументов."
+    metadata: {category: security, cwe: CWE-78, confidence: MEDIUM}
+    patterns:
+      - pattern-inside: |
+          @$MCP.tool(...)
+          def $F(...):
+              ...
+      - pattern-either:
+          - pattern: subprocess.$CALL(..., shell=True, ...)
+          - pattern: os.system(...)
+          - pattern: os.popen(...)
+  - id: mcp.python.tool-path
+    languages: [python]
+    severity: WARNING
+    message: "MCP tool: прямой доступ к пути требует проверки разрешённого каталога и симлинков. Проверьте возможность path traversal."
+    metadata: {category: security, cwe: CWE-22, confidence: MEDIUM}
+    patterns:
+      - pattern-inside: |
+          @$MCP.tool(...)
+          def $F(...):
+              ...
+      - pattern: open($PATH, ...)
+      - pattern-not: open("...", ...)
+  - id: mcp.python.tool-outbound-url
+    languages: [python]
+    severity: WARNING
+    message: "MCP tool: исходящий URL требует ограничений адресов и редиректов. Проверьте SSRF и доступ к metadata."
+    metadata: {category: security, cwe: CWE-918, confidence: MEDIUM}
+    patterns:
+      - pattern-inside: |
+          @$MCP.tool(...)
+          def $F(...):
+              ...
+      - pattern-either:
+          - pattern: requests.$METHOD($URL, ...)
+          - pattern: httpx.$METHOD($URL, ...)
+      - metavariable-pattern:
+          metavariable: $URL
+          patterns:
+            - pattern-not: '"..."'
+  - id: mcp.python.tool-environment
+    languages: [python]
+    severity: ERROR
+    message: "MCP tool возвращает всё окружение. Не передавайте секреты процесса клиенту."
+    metadata: {category: security, cwe: CWE-200, confidence: HIGH}
+    patterns:
+      - pattern-inside: |
+          @$MCP.tool(...)
+          def $F(...):
+              ...
+      - pattern-either:
+          - pattern: return dict(os.environ)
+          - pattern: return os.environ
+  - id: mcp.javascript.tool-eval
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: "MCP handler: динамическое исполнение кода требует удаления eval/Function и фиксированного набора операций."
+    metadata: {category: security, cwe: CWE-95, confidence: MEDIUM}
+    patterns:
+      - pattern-either:
+          - pattern-inside: $SERVER.tool(..., ($ARGS) => { ... })
+          - pattern-inside: $SERVER.tool(..., async ($ARGS) => { ... })
+          - pattern-inside: $SERVER.registerTool(..., ($ARGS) => { ... })
+          - pattern-inside: $SERVER.registerTool(..., async ($ARGS) => { ... })
+      - pattern-either:
+          - pattern: eval(...)
+          - pattern: new Function(...)

@@ -38,3 +38,16 @@ def on_startup() -> None:
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+@app.get("/mcp-scanners")
+def mcp_scanners():
+    import os
+    import httpx
+    from fastapi import HTTPException
+    try:
+        response = httpx.get(os.environ.get("SCANNER_MCP_URL", "http://scanner-mcp:8000") + "/engines", timeout=5)
+        response.raise_for_status()
+        return response.json()
+    except httpx.HTTPError:
+        raise HTTPException(status_code=503, detail="Сервис MCP-сканеров недоступен")

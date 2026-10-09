@@ -114,8 +114,18 @@ class MCPBundleTarget(BaseModel):
     user_config: dict[str, Any] = Field(default_factory=dict)
 
 
+class MCPSnapshotTarget(BaseModel):
+    kind: Literal["snapshot"]
+    tools: dict
+
+
+class MCPSourceTarget(BaseModel):
+    kind: Literal["source"]
+    files: dict[str, str]
+
+
 MCPTarget = Annotated[
-    Union[MCPRemoteTarget, MCPRepositoryTarget, MCPBundleTarget],
+    Union[MCPRemoteTarget, MCPRepositoryTarget, MCPBundleTarget, MCPSnapshotTarget, MCPSourceTarget],
     Field(discriminator="kind"),
 ]
 
@@ -129,6 +139,9 @@ class MCPScanConfig(BaseModel):
     """
 
     target: MCPTarget
+    probes: list[dict] = Field(default_factory=list)
+    allow_tool_calls: bool = False
+    allow_cloud: bool = False
     scanner_ids: list[str] = Field(default_factory=list)
     timeout_seconds: int = Field(default=30, ge=1, le=300)
 

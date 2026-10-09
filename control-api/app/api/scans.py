@@ -11,6 +11,7 @@ from sqlmodel import Session, delete, select
 from app.db import engine, get_session
 from app.models import AgentConfig, MCPArtifact, Scan, ScanLog, ScanLogLevel, ScanStatus, ScanType
 from app.schemas import MCPBundleTarget, MCPScanConfig, ScanLogCreate, ScanUpdate
+from app.mcp_config import upgrade_flat, validate_mcp_config
 
 router = APIRouter(prefix="/scans", tags=["scans"])
 
@@ -18,6 +19,7 @@ router = APIRouter(prefix="/scans", tags=["scans"])
 # (`POST /run/{scan_id}`, прогресс и результаты -- обратно в control-api).
 # Тип без сканера (mcp, agent_skills) запустить нельзя.
 SCANNERS: dict[ScanType, tuple[str, str]] = {
+    ScanType.MCP: ("scanner-mcp", os.environ.get("SCANNER_MCP_URL", "http://scanner-mcp:8000")),
     ScanType.DEEP_TEAM: (
         "scanner-deepteam",
         os.environ.get("SCANNER_DEEPTEAM_URL", "http://scanner-deepteam:8000"),
@@ -55,12 +57,13 @@ def _validate_scan_for_create(scan: Scan) -> Optional[MCPScanConfig]:
         raise HTTPException(status_code=422, detail="config MCP-сканирования должен быть JSON-объектом")
 
     try:
-        config = MCPScanConfig.model_validate(raw_config)
+        config = MCPScanConfig.model_validate(upgrade_flat(raw_config))
     except ValidationError as exc:
-        raise HTTPException(status_code=422, detail=exc.errors()) from exc
+        raise HTTPException(status_code=422, detail=json.loads(exc.json())) from exc
 
     # Persist normalized values so scanner-mcp receives one stable contract.
     scan.config = json.dumps(config.model_dump(mode="json"), ensure_ascii=False)
+    validate_mcp_config(scan.config)
     return config
 
 
@@ -115,6 +118,8 @@ def get_scan_agent_config(scan_id: int) -> dict:
         if not scan:
             raise HTTPException(status_code=404, detail="Scan not found")
 
+        if scan.agent_config_id is None:
+            raise HTTPException(status_code=404, detail="У этого MCP-скана нет конфигурации агента")
         agent_config = session.get(AgentConfig, scan.agent_config_id)
         if not agent_config:
             raise HTTPException(status_code=404, detail="Agent config not found")
@@ -198,6 +203,8 @@ def start_scan(scan_id: int) -> Scan:
             raise HTTPException(status_code=400, detail="Scan can only be started from PENDING status")
         if scan.type not in SCANNERS:
             raise HTTPException(status_code=400, detail=f"Для типа сканирования {scan.type.value} сканер пока не подключён")
+        if scan.type == ScanType.MCP:
+            validate_mcp_config(scan.config)
         scanner_name, scanner_url = SCANNERS[scan.type]
 
         # Fresh progress log for this run.

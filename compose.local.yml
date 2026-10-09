@@ -1,0 +1,181 @@
+# Local web development: docker compose -f compose.local.yml up -d --build
+services:
+  control-api:
+    build: ./control-api
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - control-api-data:/data
+      - ./library:/library:ro
+      - ./control-api/app/migrations/versions:/srv/app/migrations/versions
+    environment:
+      CONTROL_API_DB_PATH: /data/control-api.db
+      DEMO_SESSION_ID: demo-session-1
+      LIBRARY_DIR: /library
+      SCANNER_DEEPTEAM_URL: http://scanner-deepteam:8000
+      SCANNER_MCP_URL: http://scanner-mcp:8000
+      SCANNER_PROMPTFOO_URL: http://scanner-promptfoo:8000
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 2s
+      timeout: 2s
+    restart: unless-stopped
+  web:
+    build:
+      context: ./web
+      args:
+        VITE_CONTROL_API_URL: http://localhost:8000
+    ports:
+      - "127.0.0.1:4173:4173"
+    depends_on:
+      control-api:
+        condition: service_healthy
+    restart: unless-stopped
+  scanner-mcp:
+    build: ./scanner/mcp
+    image: agent-scanner-scanner-mcp:latest
+    environment:
+      CONTROL_API_URL: http://control-api:8000
+    depends_on:
+      control-api:
+        condition: service_healthy
+    restart: unless-stopped
+    init: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 2g
+    cpus: 2
+  scanner-mcp-cisco-yara:
+    image: agent-scanner-scanner-mcp:latest
+    environment:
+      WORKER_ENGINE: cisco_yara
+      CONTROL_API_URL: http://control-api:8000
+    init: true
+    restart: unless-stopped
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 2g
+    cpus: 2
+    pids_limit: 128
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+  scanner-mcp-cisco-readiness:
+    image: agent-scanner-scanner-mcp:latest
+    environment:
+      WORKER_ENGINE: cisco_readiness
+      CONTROL_API_URL: http://control-api:8000
+    init: true
+    restart: unless-stopped
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 2g
+    cpus: 2
+    pids_limit: 128
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+  scanner-mcp-cisco-prompt-defense:
+    image: agent-scanner-scanner-mcp:latest
+    environment:
+      WORKER_ENGINE: cisco_prompt_defense
+      CONTROL_API_URL: http://control-api:8000
+    init: true
+    restart: unless-stopped
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 2g
+    cpus: 2
+    pids_limit: 128
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+  scanner-mcp-snyk:
+    image: agent-scanner-scanner-mcp:latest
+    environment:
+      WORKER_ENGINE: snyk
+      CONTROL_API_URL: http://control-api:8000
+      SNYK_TOKEN: ${SNYK_TOKEN:-}
+    init: true
+    restart: unless-stopped
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 2g
+    cpus: 2
+    pids_limit: 128
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+  scanner-mcp-mcpradar:
+    image: agent-scanner-scanner-mcp:latest
+    environment:
+      WORKER_ENGINE: mcpradar
+      CONTROL_API_URL: http://control-api:8000
+    init: true
+    restart: unless-stopped
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 2g
+    cpus: 2
+    pids_limit: 128
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+  scanner-mcp-semgrep:
+    image: agent-scanner-scanner-mcp:latest
+    environment:
+      WORKER_ENGINE: semgrep
+      CONTROL_API_URL: http://control-api:8000
+    init: true
+    restart: unless-stopped
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 2g
+    cpus: 2
+    pids_limit: 128
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+  scanner-mcp-mcp-dynamic:
+    image: agent-scanner-scanner-mcp:latest
+    environment:
+      WORKER_ENGINE: mcp_dynamic
+      CONTROL_API_URL: http://control-api:8000
+    init: true
+    restart: unless-stopped
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 2g
+    cpus: 2
+    pids_limit: 128
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  mcp-test-target:
+    image: agent-scanner-scanner-mcp:latest
+    command: ["python", "/test/test_server.py"]
+    profiles: [test]
+    volumes:
+      - ./scanner/mcp/examples:/test:ro
+    init: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 256m
+    cpus: 1
+volumes:
+  control-api-data:

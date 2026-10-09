@@ -13,6 +13,7 @@ export function scanTypeLabel(type: string): string {
 
 // Фазы, которые пишет сканер каждого типа (Scan.phase), в порядке прохождения.
 export const SCAN_PHASES: Partial<Record<ScanType, string[]>> = {
+  mcp: ["Инициализация", "Проверка MCP", "Сохранение результатов", "Завершено"],
   deep_team: [
     "Инициализация",
     "Запуск агента",

@@ -61,7 +61,7 @@
   `GET /health`, `POST /run/{scan_id}` (ответ сразу, работа в фоне),
   прогресс/результаты — в control-api через `PATCH /scans/{id}` и
   `POST /scans/{id}/logs`. Связка «тип → сервис» — `SCANNERS` в
-  `control-api/app/api/scans.py`; тип без сканера (`mcp`, `agent_skills`)
+  `control-api/app/api/scans.py`; тип без сканера (`agent_skills`)
   запустить нельзя (400). Новый сканер = новая папка + сервис в compose +
   строка в `SCANNERS` + значение `ScanType` + фазы/результаты в `web`.
   Общий код между сканерами не выносится: `control_client.py` у каждого свой.
@@ -72,9 +72,10 @@
   скачивается сразу по публичному HTTPS URI, проверяется как ZIP с корневым
   `manifest.json` и хранится BLOB-ом в SQLite. `scanner_ids` и
   `timeout_seconds` общие для всех источников; пустой `scanner_ids` означает
-  «все доступные проверки». Клонирование, установка и запуск относятся к
-  будущему `scanner-mcp`; пока скан можно настроить и сохранить, но нельзя
-  запустить.
+  «локальный набор по типу цели» (без Snyk). `scanner-mcp` реализован как
+  координатор с отдельными контейнерами движков. Дополнительно есть
+  source/snapshot и явные probes. Код репозитория не запускается.
+  Покрытие и тесты — `docs/mcp-testing.md`, справка на сайте — `/help`.
 - **Анализ кода — облако Promptfoo.** `scanner-promptfoo` отправляет код
   агента в Promptfoo (ключ `PROMPTFOO_API_KEY` из `.env`); модель анализа
   выбирает Promptfoo, `LLMModel` не участвует. Версия CLI зафиксирована в

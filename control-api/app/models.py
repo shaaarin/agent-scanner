@@ -121,7 +121,7 @@ class ScanType(str, Enum):
 
     DEEP_TEAM = "deep_team"  # scanner-deepteam: динамическое тестирование
     CODE_SCAN = "code_scan"  # scanner-promptfoo: анализ исходного кода
-    MCP = "mcp"  # заглушка в UI, сканера пока нет
+    MCP = "mcp"  # scanner-mcp: metadata, dynamic and SAST
     AGENT_SKILLS = "agent_skills"  # заглушка в UI, сканера пока нет
 
 
