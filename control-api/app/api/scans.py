@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlmodel import Session, delete, select
 
 from app.db import engine, get_session
-from app.models import AgentConfig, Scan, ScanLog, ScanLogLevel, ScanStatus, ScanType
+from app.models import AgentConfig, InjectionTrial, Scan, ScanLog, ScanLogLevel, ScanStatus, ScanType, TrafficEvent
 from app.schemas import ScanLogCreate, ScanUpdate
 
 router = APIRouter(prefix="/scans", tags=["scans"])
@@ -24,6 +24,10 @@ SCANNERS: dict[ScanType, tuple[str, str]] = {
     ScanType.CODE_SCAN: (
         "scanner-promptfoo",
         os.environ.get("SCANNER_PROMPTFOO_URL", "http://scanner-promptfoo:8000"),
+    ),
+    ScanType.INDIRECT_INJECTION: (
+        "scanner-indirect",
+        os.environ.get("SCANNER_INDIRECT_URL", "http://scanner-indirect:8000"),
     ),
 }
 
@@ -148,6 +152,12 @@ def delete_scan(scan_id: int) -> dict:
         if not scan:
             raise HTTPException(status_code=404, detail="Scan not found")
         session.exec(delete(ScanLog).where(ScanLog.scan_id == scan_id))
+        session.exec(delete(InjectionTrial).where(InjectionTrial.scan_id == scan_id))
+        # Перехваченный трафик скана тоже удаляем: иначе осиротевшие события с
+        # переиспользованными SQLite scan_id/trial_id «подмешиваются» к новому
+        # скану (особенно критично для косвенных инъекций, где трафик
+        # группируется по trial_id).
+        session.exec(delete(TrafficEvent).where(TrafficEvent.scan_id == scan_id))
         session.delete(scan)
         session.commit()
         return {"message": "Scan deleted"}

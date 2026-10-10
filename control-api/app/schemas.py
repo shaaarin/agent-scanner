@@ -5,6 +5,8 @@ from pydantic import BaseModel, ConfigDict
 
 from app.models import (
     EventDirection,
+    InjectionTrialStatus,
+    InjectionVerdict,
     InteractionMode,
     ProviderType,
     ScanLogLevel,
@@ -106,7 +108,33 @@ class TrafficEventRead(BaseModel):
     host: str
     path: str
     upstream_base_url: Optional[str] = None
+    trial_id: Optional[int] = None
+    injected: bool = False
+    injection_target: Optional[str] = None
     created_at: datetime
+
+
+class InjectionTrialCreate(BaseModel):
+    baseline: bool = False
+    task_index: int = 0
+    task: str = ""
+    target_tool: Optional[str] = None
+    occurrence: int = 1
+    mode: str = "append"
+    payload_name: Optional[str] = None
+    payload_family: Optional[str] = None
+    payload_text: Optional[str] = None
+    canary: Optional[str] = None
+
+
+class InjectionTrialUpdate(BaseModel):
+    status: Optional[InjectionTrialStatus] = None
+    injected_count: Optional[int] = None
+    verdict: Optional[InjectionVerdict] = None
+    verdict_reason: Optional[str] = None
+    agent_response: Optional[str] = None
+    baseline_response: Optional[str] = None
+    finished_at: Optional[datetime] = None
 
 
 class TrafficEventDetail(TrafficEventRead):
