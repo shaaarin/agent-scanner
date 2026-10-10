@@ -29,6 +29,10 @@ SCANNERS: dict[ScanType, tuple[str, str]] = {
         "scanner-indirect",
         os.environ.get("SCANNER_INDIRECT_URL", "http://scanner-indirect:8000"),
     ),
+    ScanType.SYSTEM_PROMPT_LEAK: (
+        "scanner-sysleak",
+        os.environ.get("SCANNER_SYSLEAK_URL", "http://scanner-sysleak:8000"),
+    ),
 }
 
 

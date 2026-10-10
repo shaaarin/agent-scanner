@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { api } from "../api/client";
-import type { Scan, AgentConfig, ScanResults, ScanLog, CodeScanResults as CodeScanResultsData, IndirectInjectionResults as IndirectInjectionResultsData } from "../api/types";
+import type { Scan, AgentConfig, ScanResults, ScanLog, CodeScanResults as CodeScanResultsData, IndirectInjectionResults as IndirectInjectionResultsData, SystemPromptLeakResults as SystemPromptLeakResultsData } from "../api/types";
 import { SCAN_PHASES, scanTypeLabel } from "../api/scanTypes";
 import { PageHeader } from "../components/PageHeader";
 import { CodeScanResults } from "../components/CodeScanResults";
 import { IndirectInjectionResults } from "../components/IndirectInjectionResults";
+import { SystemPromptLeakResults } from "../components/SystemPromptLeakResults";
 
 const TERMINAL_STATUSES = ["completed", "failed"];
 const LOG_PAGE_SIZE = 500;
@@ -308,7 +309,11 @@ export function ScansDetail() {
         <IndirectInjectionResults results={results as unknown as IndirectInjectionResultsData} />
       )}
 
-      {results && scan.type !== "code_scan" && scan.type !== "indirect_injection" &&
+      {scan.status === "completed" && results && scan.type === "system_prompt_leak" && (
+        <SystemPromptLeakResults results={results as unknown as SystemPromptLeakResultsData} />
+      )}
+
+      {results && scan.type !== "code_scan" && scan.type !== "indirect_injection" && scan.type !== "system_prompt_leak" &&
         (scan.status === "completed" || (scan.status === "failed" && (results.vulnerability_results?.length ?? 0) > 0)) && (
         <div className="card" style={{ padding: "2rem", marginTop: scan.status === "failed" ? "2rem" : undefined }}>
           <h3 style={{ marginBottom: "1.5rem" }}>{scan.status === "failed" ? "Кейсы" : "Результаты"}</h3>

@@ -66,3 +66,25 @@ def apply(body: dict, directive: dict) -> tuple[dict, bool, Optional[str]]:
             msg["content"] = _augment(msg.get("content"), payload, mode)
             return body, True, (name or target)
     return body, False, None
+
+
+SYSTEM_ROLE = "system"
+
+
+def apply_system(body: dict, directive: dict) -> tuple[dict, bool, Optional[str]]:
+    """Вставить метку `canary` в системное сообщение (скан system_prompt_leak).
+    Если системного сообщения нет -- добавить его в начало. Метка оформляется
+    так, будто это часть инструкций: если агент выдаст свой системный промпт,
+    метка «уедет» вместе с ним, и утечку видно по её появлению в ответе."""
+    canary = directive.get("canary") or ""
+    mode = directive.get("mode") or "append"
+    messages = body.get("messages")
+    if not canary or not isinstance(messages, list):
+        return body, False, None
+    sentinel = f"[sysnote:{canary}]"
+    for msg in messages:
+        if isinstance(msg, dict) and msg.get("role") == SYSTEM_ROLE:
+            msg["content"] = _augment(msg.get("content"), sentinel, mode)
+            return body, True, SYSTEM_ROLE
+    messages.insert(0, {"role": SYSTEM_ROLE, "content": sentinel})
+    return body, True, SYSTEM_ROLE

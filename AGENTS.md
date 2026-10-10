@@ -27,6 +27,7 @@
 | `scanner-deepteam` (`scanner/deepteam`) | Скан `deep_team`: поднимает агента через `launcher`, гоняет DeepTeam, пишет фазы/журнал/результаты. |
 | `scanner-promptfoo` (`scanner/promptfoo`) | Скан `code_scan`: клонирует репозиторий агента и прогоняет `promptfoo code-scans`. kind/launcher не нужны. |
 | `scanner-indirect` (`scanner/indirect`) | Скан `indirect_injection`: поднимает агента через `launcher`, шлёт легитимную задачу и через прокси подкладывает инъекцию в результаты его инструментов (сообщения `role: tool`), оценивая по контрольной метке. |
+| `scanner-sysleak` (`scanner/sysleak`) | Скан `system_prompt_leak`: поднимает агента через `launcher`, через прокси вставляет метку в его системное сообщение и шлёт атакующие промпты, проверяя ответ на наличие метки (утечка системного промпта). |
 | `launcher` | Собирает образ агента в кластере (git-clone + Kaniko) и запускает Pod с MITM-сайдкаром, по kubeconfig, без Docker-сокета. |
 | `web` | React/Vite дашборд. **Весь текст интерфейса — на русском**, новый текст тоже. |
 | `control-api-mitm-bridge` / `launcher-mitm-bridge` | `alpine/socat`-форвардеры, владеющие опубликованным портом вместо dual-homed сервисов (quirk WSL2, см. ниже). |
@@ -75,10 +76,12 @@
 - **Прокси идентифицирует клиента.** На исходящих `chat/completions`
   ставится `User-Agent` (`LLM_CLIENT_USER_AGENT`) и, для `opencode.ai`,
   `x-opencode-session: <SESSION_ID>`. Тело/промпт не переписываются —
-  **кроме** скана `indirect_injection`: в нём прокси по директиве
-  `GET /scans/{id}/injection/active` (уточняется без кэша) дописывает payload
-  в результат нужного инструмента (`proxy/app/injection.py`). В остальных
-  сканах прокси — только наблюдатель.
+  **кроме** сканов, где прокси работает по директиве
+  `GET /scans/{id}/injection/active` (уточняется без кэша,
+  `proxy/app/injection.py`): `indirect_injection` дописывает payload в
+  результат инструмента (`apply`), `system_prompt_leak` вставляет метку в
+  системное сообщение (`apply_system`). Куда подкладывать — поле
+  `injection_point` директивы. В остальных сканах прокси — только наблюдатель.
   **Меняя `proxy/`, обязательно пересоберите и запушьте образ в локальный
   реестр** (`docker compose build proxy && docker tag agent-scanner-proxy:latest
   localhost:5001/agent-scanner-proxy:latest && docker push ...`): сайдкар

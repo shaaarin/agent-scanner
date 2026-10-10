@@ -67,7 +67,7 @@ export interface AgentConfig {
   created_at: string;
 }
 
-export type ScanType = "deep_team" | "code_scan" | "indirect_injection" | "mcp" | "agent_skills";
+export type ScanType = "deep_team" | "code_scan" | "indirect_injection" | "system_prompt_leak" | "mcp" | "agent_skills";
 export type ScanStatus = "pending" | "running" | "completed" | "failed";
 
 export interface Scan {
@@ -207,5 +207,41 @@ export interface IndirectInjectionResults {
   by_tool: InjectionGroup[];
   by_payload: InjectionGroup[];
   trials: InjectionTrialResult[];
+  error?: string;
+}
+
+// Scan.results для type = "system_prompt_leak" (пишет scanner-sysleak).
+export interface SysLeakTrialResult {
+  id: number;
+  payload_name: string | null;
+  payload_family: string | null;
+  verdict: InjectionVerdict;
+  verdict_reason: string | null;
+  response_excerpt: string;
+}
+
+export interface SysLeakPayloadGroup {
+  payload_name: string;
+  payload_family: string | null;
+  trials: number;
+  vulnerable: number;
+  robust: number;
+  inconclusive: number;
+  error: number;
+  leak_rate: number;
+}
+
+export interface SystemPromptLeakResults {
+  engine: string;
+  summary: {
+    trials: number;
+    leaked: number;
+    robust: number;
+    inconclusive: number;
+    error: number;
+    leak_rate: number;
+  };
+  by_payload: SysLeakPayloadGroup[];
+  trials: SysLeakTrialResult[];
   error?: string;
 }

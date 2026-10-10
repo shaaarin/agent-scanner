@@ -35,16 +35,25 @@ def get_active_injection(scan_id: int, session: Session = Depends(get_session)) 
     ).first()
     if not trial:
         return None
-    # Базовый прогон тоже активен (чтобы прокси пометил его трафик trial_id),
-    # но инъекцию не несёт.
-    inject = bool(not trial.baseline and trial.target_tool and trial.payload_text)
+    point = trial.injection_point
+    # Базовый прогон (indirect) активен, чтобы прокси пометил трафик trial_id,
+    # но инъекцию не несёт. Для system_prompt инъекция -- это метка canary в
+    # системном сообщении; для tool_result -- payload в результате инструмента.
+    if trial.baseline:
+        inject = False
+    elif point == "system_prompt":
+        inject = bool(trial.canary)
+    else:
+        inject = bool(trial.target_tool and trial.payload_text)
     return {
         "trial_id": trial.id,
         "inject": inject,
+        "injection_point": point,
         "target_tool": trial.target_tool,
         "occurrence": trial.occurrence,
         "mode": trial.mode,
-        "payload_text": trial.payload_text if inject else None,
+        "payload_text": trial.payload_text if (inject and point == "tool_result") else None,
+        "canary": trial.canary if (inject and point == "system_prompt") else None,
     }
 
 
