@@ -115,6 +115,7 @@ class TrafficEventRead(BaseModel):
 
 
 class InjectionTrialCreate(BaseModel):
+    injection_point: str = "tool_result"
     baseline: bool = False
     task_index: int = 0
     task: str = ""

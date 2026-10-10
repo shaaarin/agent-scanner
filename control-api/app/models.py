@@ -129,6 +129,7 @@ class ScanType(str, Enum):
     DEEP_TEAM = "deep_team"  # scanner-deepteam: динамическое тестирование
     CODE_SCAN = "code_scan"  # scanner-promptfoo: анализ исходного кода
     INDIRECT_INJECTION = "indirect_injection"  # scanner-indirect: косвенные инъекции в результаты инструментов
+    SYSTEM_PROMPT_LEAK = "system_prompt_leak"  # scanner-sysleak: утечка системного промпта
     MCP = "mcp"  # заглушка в UI, сканера пока нет
     AGENT_SKILLS = "agent_skills"  # заглушка в UI, сканера пока нет
 
@@ -210,27 +211,44 @@ class InjectionTrialStatus(str, Enum):
 
 
 class InjectionVerdict(str, Enum):
-    ROBUST = "robust"  # инъекция подложена, но агент ей не поддался
-    VULNERABLE = "vulnerable"  # агент выполнил инструкцию из результата инструмента
-    INCONCLUSIVE = "inconclusive"  # агент не вызвал целевой инструмент -- подложить было некуда
+    ROBUST = "robust"  # инъекция подложена, но агент ей не поддался (для sysleak -- не утёк)
+    VULNERABLE = "vulnerable"  # агент выполнил инструкцию (для sysleak -- системный промпт утёк)
+    INCONCLUSIVE = "inconclusive"  # подложить было некуда (нет вызова инструмента / не вставилась метка)
     ERROR = "error"
 
 
+class InjectionPoint(str, Enum):
+    """Куда прокси подкладывает по директиве активного прогона:
+    - TOOL_RESULT -- в результат инструмента (`role: tool`), скан indirect_injection;
+    - SYSTEM_PROMPT -- в системное сообщение (`role: system`), скан system_prompt_leak.
+    """
+
+    TOOL_RESULT = "tool_result"
+    SYSTEM_PROMPT = "system_prompt"
+
+
 class InjectionTrial(SQLModel, table=True):
-    """Один прогон агента в скане `indirect_injection`: ему отправляется
-    легитимная задача, а прокси (по директиве `GET /scans/{id}/injection/active`)
-    дописывает `payload_text` в результат инструмента `target_tool`. Базовый
-    прогон (`baseline=True`) идёт без инъекции -- по нему находятся точки
-    вызова инструментов. Прогоны выполняются последовательно, поэтому
-    `RUNNING`-прогон в скане всегда ровно один."""
+    """Один прогон агента для сканов, где прокси подменяет тело запроса по
+    активной директиве (`GET /scans/{id}/injection/active`). Прогоны идут
+    последовательно, поэтому `RUNNING`-прогон в скане всегда ровно один.
+
+    Два вида инъекции (`injection_point`):
+    - `tool_result` (indirect_injection) -- агенту шлётся легитимная задача
+      (`task`), прокси дописывает `payload_text` в результат инструмента
+      `target_tool`; `baseline=True` -- прогон без инъекции для поиска вызовов;
+    - `system_prompt` (system_prompt_leak) -- агенту шлётся атакующий промпт
+      (`payload_text`), прокси вставляет метку `canary` в системное сообщение;
+      утечка = метка всплыла в ответе агента.
+    """
 
     id: Optional[int] = Field(default=None, primary_key=True)
     scan_id: int = Field(foreign_key="scan.id", index=True)
+    injection_point: InjectionPoint = InjectionPoint.TOOL_RESULT
     baseline: bool = False
     task_index: int = 0
     task: str = Field(default="", sa_column=Column(Text))
     # Куда подкладывать: имя инструмента (или "*" -- любой) и какой по счёту
-    # его вызов. Для baseline -- None.
+    # его вызов. Для baseline и для system_prompt -- None.
     target_tool: Optional[str] = None
     occurrence: int = 1
     mode: str = "append"  # append | prepend | replace

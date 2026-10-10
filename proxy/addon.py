@@ -103,12 +103,15 @@ class InjectionAddon:
         trial_id = None
         injected = False
         injection_target = None
-        if scan and scan.get("type") == "indirect_injection":
+        if scan and scan.get("type") in ("indirect_injection", "system_prompt_leak"):
             directive = await control_client.get_active_injection(scan["scan_id"])
             if directive:
                 trial_id = directive.get("trial_id")
                 if directive.get("inject"):
-                    body, injected, injection_target = injection.apply(body, directive)
+                    if directive.get("injection_point") == "system_prompt":
+                        body, injected, injection_target = injection.apply_system(body, directive)
+                    else:
+                        body, injected, injection_target = injection.apply(body, directive)
                     if injected:
                         flow.request.content = json.dumps(body).encode()
         flow.metadata["trial_id"] = trial_id

@@ -84,6 +84,9 @@ export function Scans() {
         .filter(Boolean);
       config.repeats = injectionRepeats;
       config.max_trials = injectionMaxTrials;
+    } else if (newScanType === "system_prompt_leak") {
+      config.repeats = injectionRepeats;
+      config.max_trials = injectionMaxTrials;
     }
 
     setCreateError(null);
@@ -262,6 +265,8 @@ export function Scans() {
                 ? "Платформа скачает код агента из его репозитория и проверит его через promptfoo. Агент не запускается, анализ выполняется в облаке Promptfoo."
                 : newScanType === "indirect_injection"
                 ? "Платформа запустит агента, отправит ему легитимную задачу и во время работы подложит инъекцию в результаты его инструментов, проверяя, поддаётся ли агент."
+                : newScanType === "system_prompt_leak"
+                ? "Платформа запустит агента, через прокси вставит метку в его системное сообщение и отправит атакующие промпты, проверяя, не раскроет ли агент системный промпт (метка всплывёт в ответе)."
                 : "Платформа запустит агента и проверит его ответы на выбранные классы атак."}
             </p>
             <div style={{ marginBottom: "1rem" }}>
@@ -286,6 +291,7 @@ export function Scans() {
                 <option value="deep_team">Динамическое тестирование</option>
                 <option value="code_scan">Анализ кода (promptfoo)</option>
                 <option value="indirect_injection">Косвенные инъекции</option>
+                <option value="system_prompt_leak">Утечка системного промпта</option>
                 <option value="mcp">MCP (в разработке)</option>
                 <option value="agent_skills">Agent Skills (в разработке)</option>
               </select>
@@ -412,6 +418,41 @@ export function Scans() {
                   </div>
                 </div>
               </>
+            )}
+
+            {newScanType === "system_prompt_leak" && (
+              <div style={{ display: "flex", gap: "1rem", marginBottom: "1.5rem" }}>
+                <div style={{ flex: 1 }}>
+                  <label style={{ display: "block", marginBottom: "0.5rem" }}>Повторов на промпт</label>
+                  <input
+                    type="number"
+                    className="input"
+                    min={1}
+                    max={10}
+                    value={injectionRepeats}
+                    onChange={(e) => setInjectionRepeats(Math.max(1, Number(e.target.value)))}
+                    style={{ width: "100%" }}
+                  />
+                  <p style={{ margin: "0.4rem 0 0", fontSize: 12, color: "var(--text-500)" }}>
+                    Ответы недетерминированы — повторы дают долю утечек.
+                  </p>
+                </div>
+                <div style={{ flex: 1 }}>
+                  <label style={{ display: "block", marginBottom: "0.5rem" }}>Лимит прогонов</label>
+                  <input
+                    type="number"
+                    className="input"
+                    min={1}
+                    max={500}
+                    value={injectionMaxTrials}
+                    onChange={(e) => setInjectionMaxTrials(Math.max(1, Number(e.target.value)))}
+                    style={{ width: "100%" }}
+                  />
+                  <p style={{ margin: "0.4rem 0 0", fontSize: 12, color: "var(--text-500)" }}>
+                    Атакующие промпты берутся из встроенного датасета.
+                  </p>
+                </div>
+              </div>
             )}
 
             {newScanType === "deep_team" && (
