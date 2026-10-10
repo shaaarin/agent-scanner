@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import type { SystemPromptLeakResults as ResultsData, InjectionVerdict } from "../api/types";
 
 const VERDICT_LABELS: Record<InjectionVerdict, string> = {
@@ -23,6 +23,7 @@ function rateColor(rate: number): string {
 
 export function SystemPromptLeakResults({ results }: { results: ResultsData }) {
   const [onlyLeaked, setOnlyLeaked] = useState(false);
+  const [expanded, setExpanded] = useState<number | null>(null);
   const s = results.summary;
   const trials = onlyLeaked ? results.trials.filter((t) => t.verdict === "vulnerable") : results.trials;
 
@@ -91,17 +92,37 @@ export function SystemPromptLeakResults({ results }: { results: ResultsData }) {
             <th style={{ padding: "0.6rem", textAlign: "left" }}>Промпт</th>
             <th style={{ padding: "0.6rem", textAlign: "left" }}>Вердикт</th>
             <th style={{ padding: "0.6rem", textAlign: "left" }}>Обоснование</th>
+            <th style={{ padding: "0.6rem", textAlign: "right" }}>Ответ агента</th>
           </tr>
         </thead>
         <tbody>
           {trials.map((t) => (
-            <tr key={t.id} style={{ borderBottom: "0.1rem solid var(--separator-default)" }}>
-              <td style={{ padding: "0.6rem", fontSize: "0.85rem" }}>{t.payload_name ?? "—"}</td>
-              <td style={{ padding: "0.6rem" }}>
-                <span className={`badge ${VERDICT_BADGE[t.verdict]}`}>{VERDICT_LABELS[t.verdict]}</span>
-              </td>
-              <td style={{ padding: "0.6rem", fontSize: "0.85rem", color: "var(--text-600)" }}>{t.verdict_reason}</td>
-            </tr>
+            <Fragment key={t.id}>
+              <tr style={{ borderBottom: expanded === t.id ? "none" : "0.1rem solid var(--separator-default)" }}>
+                <td style={{ padding: "0.6rem", fontSize: "0.85rem" }}>{t.payload_name ?? "—"}</td>
+                <td style={{ padding: "0.6rem" }}>
+                  <span className={`badge ${VERDICT_BADGE[t.verdict]}`}>{VERDICT_LABELS[t.verdict]}</span>
+                </td>
+                <td style={{ padding: "0.6rem", fontSize: "0.85rem", color: "var(--text-600)" }}>{t.verdict_reason}</td>
+                <td style={{ padding: "0.6rem", textAlign: "right" }}>
+                  <button className="btn btn-sm btn-secondary" onClick={() => setExpanded(expanded === t.id ? null : t.id)}>
+                    {expanded === t.id ? "Скрыть" : "Показать"}
+                  </button>
+                </td>
+              </tr>
+              {expanded === t.id && (
+                <tr style={{ borderBottom: "0.1rem solid var(--separator-default)" }}>
+                  <td colSpan={4} style={{ padding: "0 0.6rem 1rem" }}>
+                    <div style={{ color: "var(--text-600)", fontSize: "0.8rem", marginBottom: "0.4rem" }}>
+                      Ответ агента на этот промпт (как есть):
+                    </div>
+                    <pre style={{ margin: 0, padding: "1rem", background: "var(--background-generic)", borderRadius: "var(--radius-m)", whiteSpace: "pre-wrap", fontSize: "0.8rem", lineHeight: 1.5 }}>
+                      {t.response_excerpt || "— (пустой ответ)"}
+                    </pre>
+                  </td>
+                </tr>
+              )}
+            </Fragment>
           ))}
         </tbody>
       </table>
