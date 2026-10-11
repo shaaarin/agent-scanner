@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Optional
 
-from sqlalchemy import Column, JSON, Text
+from sqlalchemy import Column, JSON, LargeBinary, Text
 from sqlmodel import Field, SQLModel
 
 
@@ -130,7 +130,7 @@ class ScanType(str, Enum):
     CODE_SCAN = "code_scan"  # scanner-promptfoo: анализ исходного кода
     INDIRECT_INJECTION = "indirect_injection"  # scanner-indirect: косвенные инъекции в результаты инструментов
     SYSTEM_PROMPT_LEAK = "system_prompt_leak"  # scanner-sysleak: утечка системного промпта
-    MCP = "mcp"  # заглушка в UI, сканера пока нет
+    MCP = "mcp"  # scanner-mcp: metadata, dynamic and SAST
     AGENT_SKILLS = "agent_skills"  # заглушка в UI, сканера пока нет
 
 
@@ -141,6 +141,25 @@ class ScanStatus(str, Enum):
     FAILED = "failed"
 
 
+class MCPArtifact(SQLModel, table=True):
+    """An immutable MCPB uploaded by the user or materialized from HTTPS.
+
+    The archive stays as a BLOB in SQLite for the MVP. List/read schemas never
+    expose ``content``; a future scanner-mcp service will request it through a
+    dedicated endpoint immediately before scanning.
+    """
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    original_filename: str
+    source_type: str  # upload | url
+    source_url: Optional[str] = None
+    sha256: str = Field(index=True)
+    size_bytes: int
+    manifest: dict = Field(default_factory=dict, sa_column=Column(JSON))
+    content: bytes = Field(sa_column=Column(LargeBinary, nullable=False))
+    created_at: datetime = Field(default_factory=utcnow)
+
+
 class Scan(SQLModel, table=True):
     """Security scan configuration for an agent: DeepTeam red teaming,
     MCP testing, or Agent Skills assessment.
@@ -149,7 +168,10 @@ class Scan(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     name: str = Field(index=True)
     type: ScanType
-    agent_config_id: int = Field(foreign_key="agentconfig.id", index=True)
+    # Agent-backed scans (deep_team, code_scan) require this reference at the
+    # API level. Remote targets such as an MCP server do not have an
+    # AgentConfig, so the database relationship itself is optional.
+    agent_config_id: Optional[int] = Field(default=None, foreign_key="agentconfig.id", index=True)
     status: ScanStatus = ScanStatus.PENDING
     session_id: str = Field(index=True)  # Links scan to proxy session
     # JSON config specific to scan type:
@@ -157,7 +179,8 @@ class Scan(SQLModel, table=True):
     # - CODE_SCAN: {"min_severity": "low|medium|high|critical", "guidance": str | null}
     # - INDIRECT_INJECTION: {"tasks": [str], "target_tools": [str], "payloads": [str],
     #                        "repeats": int, "max_trials": int}
-    # - MCP: {} (placeholder)
+    # - MCP: {"target": {"kind": "remote|repository|bundle", ...},
+    #         "scanner_ids": [...], "timeout_seconds": int}
     # - AGENT_SKILLS: {} (placeholder)
     config: str = Field(default="{}", sa_column=Column(JSON))
     # JSON results, shape depends on type:

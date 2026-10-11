@@ -3,7 +3,7 @@ FROM python:3.12-slim
 WORKDIR /srv
 
 COPY pyproject.toml ./
-RUN pip install --no-cache-dir fastapi "uvicorn[standard]" sqlmodel httpx pyyaml alembic
+RUN pip install --no-cache-dir fastapi "uvicorn[standard]" sqlmodel httpx pyyaml alembic python-multipart
 
 COPY app ./app
 COPY alembic.ini ./alembic.ini

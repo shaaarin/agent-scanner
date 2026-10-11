@@ -4,9 +4,11 @@ import { Icon, type IconName } from "./Icon";
 const items: { to: string; label: string; icon: IconName; end?: boolean }[] = [
   { to: "/", label: "Главная", icon: "home", end: true },
   { to: "/scans", label: "Сканирования", icon: "scans" },
+  { to: "/mcp-scanners", label: "MCP-сканеры", icon: "scans" },
   { to: "/llm-models", label: "LLM-модели", icon: "llm" },
   { to: "/agent-configs", label: "Конфигурации агентов", icon: "agent" },
   { to: "/library", label: "Библиотека знаний", icon: "library" },
+  { to: "/help", label: "Справка", icon: "library" },
   { to: "/events", label: "События", icon: "events" },
 ];
 

@@ -74,7 +74,7 @@ export interface Scan {
   id: number;
   name: string;
   type: ScanType;
-  agent_config_id: number;
+  agent_config_id: number | null;
   status: ScanStatus;
   session_id: string;
   config: string; // JSON string
@@ -116,6 +116,44 @@ export interface ScanLog {
 }
 
 export type CodeScanSeverity = "critical" | "high" | "medium" | "low";
+export type MCPTransport = "auto" | "streamable_http" | "sse";
+export type MCPTargetKind = "remote" | "repository" | "bundle";
+
+export interface MCPRemoteTarget {
+  kind: "remote";
+  server_url: string;
+  transport: MCPTransport;
+  headers: Record<string, string>;
+  verify_tls: boolean;
+}
+
+export interface MCPRepositoryTarget {
+  kind: "repository";
+  git_repo_url: string;
+  git_ref: string;
+  git_access_token: string | null;
+  config_path: string;
+  env: Record<string, string>;
+}
+
+export interface MCPBundleTarget {
+  kind: "bundle";
+  artifact_id: number;
+  user_config: Record<string, unknown>;
+}
+
+export type MCPTarget = MCPRemoteTarget | MCPRepositoryTarget | MCPBundleTarget;
+
+export interface MCPArtifact {
+  id: number;
+  original_filename: string;
+  source_type: "upload" | "url";
+  source_url: string | null;
+  sha256: string;
+  size_bytes: number;
+  manifest: Record<string, unknown>;
+  created_at: string;
+}
 
 export interface ScanConfig {
   // deep_team
@@ -126,6 +164,10 @@ export interface ScanConfig {
   // code_scan
   min_severity?: CodeScanSeverity;
   guidance?: string | null;
+  // mcp; an empty scanner_ids list means all scanners available in scanner-mcp
+  target?: MCPTarget;
+  scanner_ids?: string[];
+  timeout_seconds?: number;
 }
 
 export interface CodeScanFinding {

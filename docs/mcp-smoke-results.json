@@ -1,0 +1,182 @@
+{
+  "results": [
+    {
+      "case": "SAST · проблемный Python",
+      "scan_id": 42,
+      "status": "completed",
+      "passed": true,
+      "findings": 4,
+      "checks": null,
+      "error": null,
+      "url": "http://localhost:4173/scans/42"
+    },
+    {
+      "case": "SAST · исправленный Python",
+      "scan_id": 43,
+      "status": "completed",
+      "passed": true,
+      "findings": 0,
+      "checks": null,
+      "error": null,
+      "url": "http://localhost:4173/scans/43"
+    },
+    {
+      "case": "YARA · инъекция в каталоге",
+      "scan_id": 44,
+      "status": "completed",
+      "passed": true,
+      "findings": 1,
+      "checks": null,
+      "error": null,
+      "url": "http://localhost:4173/scans/44"
+    },
+    {
+      "case": "Readiness · каталог",
+      "scan_id": 45,
+      "status": "completed",
+      "passed": true,
+      "findings": 8,
+      "checks": null,
+      "error": null,
+      "url": "http://localhost:4173/scans/45"
+    },
+    {
+      "case": "Prompt Defense · каталог",
+      "scan_id": 46,
+      "status": "completed",
+      "passed": true,
+      "findings": 11,
+      "checks": null,
+      "error": null,
+      "url": "http://localhost:4173/scans/46"
+    },
+    {
+      "case": "Динамика · реальные вызовы",
+      "scan_id": 47,
+      "status": "completed",
+      "passed": true,
+      "findings": 0,
+      "checks": [
+        {
+          "name": "initialize + tools/list",
+          "status": "passed",
+          "evidence": "Получено инструментов: 3"
+        },
+        {
+          "name": "Вызов 1: echo",
+          "status": "passed",
+          "evidence": "{\"content\": [{\"type\": \"text\", \"text\": \"mcp-probe-123\"}], \"structuredContent\": {\"result\": \"mcp-probe-123\"}, \"isError\": false}"
+        },
+        {
+          "name": "Вызов 2: add",
+          "status": "passed",
+          "evidence": "{\"content\": [{\"type\": \"text\", \"text\": \"5\"}], \"structuredContent\": {\"result\": 5}, \"isError\": false}"
+        },
+        {
+          "name": "Стабильность каталога в сессии",
+          "status": "passed",
+          "evidence": "e4a24a427284e829c0002a6cae9d8f0d036202aa0f4f75a574b07bed0c115e8b → e4a24a427284e829c0002a6cae9d8f0d036202aa0f4f75a574b07bed0c115e8b"
+        }
+      ],
+      "error": null,
+      "url": "http://localhost:4173/scans/47"
+    },
+    {
+      "case": "Динамика · отклонение ожидания",
+      "scan_id": 48,
+      "status": "completed",
+      "passed": true,
+      "findings": 1,
+      "checks": [
+        {
+          "name": "initialize + tools/list",
+          "status": "passed",
+          "evidence": "Получено инструментов: 3"
+        },
+        {
+          "name": "Вызов 1: echo",
+          "status": "failed",
+          "evidence": "{\"content\": [{\"type\": \"text\", \"text\": \"actual\"}], \"structuredContent\": {\"result\": \"actual\"}, \"isError\": false}"
+        },
+        {
+          "name": "Стабильность каталога в сессии",
+          "status": "passed",
+          "evidence": "e4a24a427284e829c0002a6cae9d8f0d036202aa0f4f75a574b07bed0c115e8b → e4a24a427284e829c0002a6cae9d8f0d036202aa0f4f75a574b07bed0c115e8b"
+        }
+      ],
+      "error": null,
+      "url": "http://localhost:4173/scans/48"
+    },
+    {
+      "case": "YARA · живой MCP",
+      "scan_id": 49,
+      "status": "completed",
+      "passed": true,
+      "findings": 1,
+      "checks": null,
+      "error": null,
+      "url": "http://localhost:4173/scans/49"
+    },
+    {
+      "case": "MCPRadar · инъекция в каталоге",
+      "scan_id": 50,
+      "status": "completed",
+      "passed": true,
+      "findings": 1,
+      "checks": null,
+      "error": null,
+      "url": "http://localhost:4173/scans/50"
+    },
+    {
+      "case": "MCPRadar · живой MCP",
+      "scan_id": 51,
+      "status": "completed",
+      "passed": true,
+      "findings": 5,
+      "checks": null,
+      "error": null,
+      "url": "http://localhost:4173/scans/51"
+    },
+    {
+      "case": "SAST · Python SSRF",
+      "scan_id": 52,
+      "status": "completed",
+      "passed": true,
+      "findings": 1,
+      "checks": null,
+      "error": null,
+      "url": "http://localhost:4173/scans/52"
+    },
+    {
+      "case": "SAST · TypeScript",
+      "scan_id": 53,
+      "status": "completed",
+      "passed": true,
+      "findings": 1,
+      "checks": null,
+      "error": null,
+      "url": "http://localhost:4173/scans/53"
+    },
+    {
+      "case": "SAST · вне MCP-инструмента",
+      "scan_id": 54,
+      "status": "completed",
+      "passed": true,
+      "findings": 0,
+      "checks": null,
+      "error": null,
+      "url": "http://localhost:4173/scans/54"
+    },
+    {
+      "case": "SAST · MCPB из ветки",
+      "scan_id": 55,
+      "status": "completed",
+      "passed": true,
+      "findings": 4,
+      "checks": null,
+      "error": null,
+      "url": "http://localhost:4173/scans/55"
+    }
+  ],
+  "all_passed": true
+}

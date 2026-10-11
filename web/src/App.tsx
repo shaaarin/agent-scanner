@@ -7,6 +7,8 @@ import { AgentConfigs } from "./pages/AgentConfigs";
 import { Events } from "./pages/Events";
 import { Scans } from "./pages/Scans";
 import { ScansDetail } from "./pages/ScansDetail";
+import { Help } from "./pages/Help";
+import { MCPScanners } from "./pages/MCPScanners";
 import { Library } from "./pages/Library";
 
 export default function App() {
@@ -32,6 +34,8 @@ export default function App() {
         <div style={{ maxWidth: 1200, margin: "0 auto", padding: "3.2rem" }}>
           <Routes>
             <Route path="/" element={<Dashboard />} />
+            <Route path="/help" element={<Help />} />
+            <Route path="/mcp-scanners" element={<MCPScanners />} />
             <Route path="/scans" element={<Scans />} />
             <Route path="/scans/:id" element={<ScansDetail />} />
             <Route path="/llm-models" element={<LLMModels />} />

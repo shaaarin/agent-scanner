@@ -8,6 +8,8 @@ import { CodeScanResults } from "../components/CodeScanResults";
 import { IndirectInjectionResults } from "../components/IndirectInjectionResults";
 import { SystemPromptLeakResults } from "../components/SystemPromptLeakResults";
 
+import { MCPResults, type MCPResultData } from "../components/MCPResults";
+
 const TERMINAL_STATUSES = ["completed", "failed"];
 const LOG_PAGE_SIZE = 500;
 
@@ -121,7 +123,7 @@ export function ScansDetail() {
     return <div>Загрузка сканирования…</div>;
   }
 
-  if (scan.type === "mcp" || scan.type === "agent_skills") {
+  if (scan.type === "agent_skills") {
     return (
       <div>
       <PageHeader
@@ -284,7 +286,7 @@ export function ScansDetail() {
             Сканирование ещё не запускалось
           </p>
           <p style={{ color: "var(--text-500)", fontSize: 13, margin: "0.6rem 0 0" }}>
-            {scan.type === "code_scan"
+            {scan.type === "mcp" ? "Платформа выполнит выбранный MCP-сканер с параметрами этого теста." : scan.type === "code_scan"
               ? "Платформа скачает код агента и проверит его через promptfoo. Агент при этом не запускается."
               : "Платформа соберёт агента, поднимет его и проверит ответы на выбранные атаки."}
           </p>
@@ -313,7 +315,9 @@ export function ScansDetail() {
         <SystemPromptLeakResults results={results as unknown as SystemPromptLeakResultsData} />
       )}
 
-      {results && scan.type !== "code_scan" && scan.type !== "indirect_injection" && scan.type !== "system_prompt_leak" &&
+      {results && scan.type === "mcp" && <MCPResults results={results as unknown as MCPResultData} />}
+
+      {results && scan.type !== "code_scan" && scan.type !== "indirect_injection" && scan.type !== "system_prompt_leak" && scan.type !== "mcp" &&
         (scan.status === "completed" || (scan.status === "failed" && (results.vulnerability_results?.length ?? 0) > 0)) && (
         <div className="card" style={{ padding: "2rem", marginTop: scan.status === "failed" ? "2rem" : undefined }}>
           <h3 style={{ marginBottom: "1.5rem" }}>{scan.status === "failed" ? "Кейсы" : "Результаты"}</h3>

@@ -135,8 +135,9 @@ Agent Scanner проверяет LLM-агентов с вызовом инстр
    отдаётся страницами по 500 строк, UI дочитывает его до конца.
 
 Статусы: `pending`, `running`, `completed`, `failed`.
-Типы: `deep_team`, `code_scan`, `indirect_injection` и `system_prompt_leak`
-(реализованы), `mcp` и `agent_skills` (заглушки в UI, запуск отклоняется).
+Типы: `deep_team`, `code_scan`, `indirect_injection`, `system_prompt_leak`
+и `mcp` реализованы; `agent_skills` пока отклоняется.
+MCP выполняет координатор и отдельные контейнеры движков; детали — [mcp-testing.md](mcp-testing.md).
 
 ## 5. Модель данных
 
@@ -144,7 +145,8 @@ Agent Scanner проверяет LLM-агентов с вызовом инстр
 |---|---|
 | `LLMModel` | Провайдер + модель + `base_url` + `api_key`. Хранится в открытом виде (принятый техдолг). Используется как модель-судья DeepTeam. |
 | `AgentConfig` | Репозиторий (`git_repo_url`/`git_ref`/`git_access_token`), `dockerfile_path`, `env_example_path`, `env_vars`, `api_port`, `agent_purpose` (назначение агента для DeepTeam), `interaction_mode` (`none`/`api`/`langgraph`), `api_config`, `langgraph_config`. Агента со сканированиями удалить нельзя (409): SQLite не проверяет внешние ключи. |
-| `Scan` | Параметры и состояние скана: `type`, `status`, `session_id`, JSON `config`, JSON `results`, `phase`, `error`, а также метаданные запуска (`agent_namespace`, `agent_pod_name`, `build_job_name`, `built_image`), `started_at`/`finished_at`. |
+| `Scan` | Параметры и состояние скана: `type`, необязательный `agent_config_id` (у MCP-цели его нет), `status`, `session_id`, JSON `config`, JSON `results`, `phase`, `error`, а также метаданные запуска (`agent_namespace`, `agent_pod_name`, `build_job_name`, `built_image`), `started_at`/`finished_at`. |
+| `MCPArtifact` | Неизменяемый MCPB-архив: исходное имя и URI, SHA-256, размер, разобранный `manifest.json` и исходные байты в SQLite BLOB. Содержимое не отдаётся списковым API. |
 | `ScanLog` | Строка журнала скана: `level` (`info`/`success`/`error`), `phase`, `message`, `created_at`. |
 | `TrafficEvent` | Перехваченный обмен: `session_id`, `scan_id`, `flow_id`, `direction` (`request`/`response`), `provider`, `host`, `path`, полное тело `raw_excerpt`, `upstream_base_url`. Для косвенных инъекций ещё `trial_id`, `injected`, `injection_target`. |
 | `InjectionTrial` | Один прогон сканов, где прокси подменяет тело по активной директиве: `scan_id`, `injection_point` (`tool_result`/`system_prompt`), `baseline`, `task`, точка (`target_tool`/`occurrence`/`mode`), `payload_*`, `canary`, `status`, `injected_count`, `verdict` (`vulnerable`/`robust`/`inconclusive`/`error`), `agent_response`. Используют `indirect_injection` и `system_prompt_leak`. |
@@ -154,7 +156,16 @@ Agent Scanner проверяет LLM-агентов с вызовом инстр
 - `deep_team`: `{"eval_llm_model_id": <id>, "vulnerabilities": [...], "attacks": [...]}`;
 - `code_scan`: `{"min_severity": "low|medium|high|critical", "guidance": <текст|null>}`;
 - `indirect_injection`: `{"tasks": [...], "target_tools": [...], "payloads": [...], "repeats": <n>, "max_trials": <n>}`;
-- `system_prompt_leak`: `{"payloads": [...], "repeats": <n>, "max_trials": <n>}`.
+- `system_prompt_leak`: `{"payloads": [...], "repeats": <n>, "max_trials": <n>}`;
+- `mcp`: `{"target": {...}, "scanner_ids": [...], "timeout_seconds": 30}`. `target.kind` принимает `remote` (`server_url`, `transport`, `headers`, `verify_tls`), `repository` (`git_repo_url`, `git_ref`, `git_access_token`, `config_path`, `env`) или `bundle` (`artifact_id`, `user_config`). Пустой `scanner_ids` выбирает локальный набор по типу цели (без Snyk). Дополнительно поддержаны source/snapshot, allow_cloud, allow_tool_calls и probes. Токены, заголовки и переменные окружения хранятся в открытом виде в рамках принятого техдолга MVP.
+
+MCPB загружается через `POST /mcp-artifacts/upload` либо немедленно
+материализуется из публичного HTTPS URI через `POST /mcp-artifacts/from-url`.
+API ограничивает размер, число файлов и распакованный объём, запрещает
+небезопасные пути и symlink, проверяет корневой `manifest.json`; URI не может
+разрешаться во внутренний/loopback адрес. Архив не распаковывается и не
+исполняется на этом этапе. Для MCP SAST доступны метаданные и
+`GET /mcp-artifacts/{id}/content`.
 
 `Scan.results` по типам: `deep_team` — `vulnerability_results` и
 `overall_score` (§7.1), `code_scan` — `summary` и `findings` (§7.2),
