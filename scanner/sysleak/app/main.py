@@ -25,6 +25,49 @@ def health():
     return {"status": "ok"}
 
 
+def _max_trials_default() -> int:
+    import os
+
+    return int(os.environ.get("SYSLEAK_MAX_TRIALS", "60"))
+
+
+@app.get("/schema")
+def schema():
+    """Описание полей конфига для динамической формы UI. Список payload'ов --
+    атакующие промпты из payloads.yaml, ровно те имена, что фильтрует runner."""
+    from app.payloads import load_payloads
+
+    return {
+        "type": "system_prompt_leak",
+        "fields": [
+            {
+                "name": "payloads",
+                "label": "Атакующие промпты",
+                "type": "enum_multi",
+                "required": False,
+                "default": [],
+                "options": [{"value": payload["name"], "label": payload["name"]} for payload in load_payloads()],
+                "help": "Пусто — используются все промпты.",
+            },
+            {
+                "name": "repeats",
+                "label": "Повторов на payload",
+                "type": "integer",
+                "required": False,
+                "default": 1,
+            },
+            {
+                "name": "max_trials",
+                "label": "Максимум прогонов",
+                "type": "integer",
+                "required": False,
+                "default": _max_trials_default(),
+                "help": "Верхняя граница числа прогонов на скан.",
+            },
+        ],
+    }
+
+
 @app.post("/run/{scan_id}")
 async def run_scan(scan_id: int):
     """Запускает скан в фоновом потоке и сразу отвечает -- прогресс UI

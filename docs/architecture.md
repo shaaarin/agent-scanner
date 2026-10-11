@@ -9,6 +9,11 @@ Agent Scanner проверяет LLM-агентов с вызовом инстр
 
 - **динамическое тестирование** — платформа запускает агента и прогоняет
   его атаками (DeepTeam), оценивая, следует ли агент инъекции;
+- **red teaming (PyRIT)** — платформа запускает агента и атакует его
+  целями Microsoft PyRIT: одиночными промптами с конвертерами,
+  адверсариальным многораундовым диалогом (RedTeaming) и постепенной
+  эскалацией (Crescendo); успешность атаки оценивает модель-судья
+  (см. §7.6);
 - **косвенные инъекции** — платформа запускает агента, шлёт ему легитимную
   задачу и во время работы подкладывает инъекцию в результаты его
   инструментов, проверяя, поддаётся ли агент (см. §7.3);
@@ -19,8 +24,11 @@ Agent Scanner проверяет LLM-агентов с вызовом инстр
   обмену можно посмотреть тела запроса и ответа.
 
 Отдельно от перехвата работает **анализ кода**: платформа клонирует
-репозиторий агента и проверяет исходники через promptfoo code-scans, не
-запуская агента (см. §7.2 и [`code-scan-architecture.md`](code-scan-architecture.md)).
+репозиторий агента и проверяет исходники, не запуская агента. Два анализа:
+через promptfoo code-scans в облаке Promptfoo (см. §7.2 и
+[`code-scan-architecture.md`](code-scan-architecture.md)) и локальным
+Semgrep по правилам для AI/LLM-кода (см. §7.5) — код при этом не покидает
+платформу.
 
 ## 2. Компоненты
 
@@ -56,12 +64,14 @@ Agent Scanner проверяет LLM-агентов с вызовом инстр
 
 | Сервис | Назначение |
 |---|---|
-| `control-api` | FastAPI + SQLModel/SQLite. Хранит модели, конфиги агентов, сканы, журналы и события. Применяет миграции Alembic на старте. |
+| `control-api` | FastAPI + SQLModel/PostgreSQL. Хранит модели, конфиги агентов, сканы, журналы и события. Применяет миграции Alembic на старте. |
 | `proxy` | mitmproxy-аддон (`proxy/addon.py`). Точка перехвата трафика агента; журналирует запросы/ответы и помечает клиента. В скане `indirect_injection` ещё и подкладывает payload в результат инструмента (`proxy/app/injection.py`). |
 | `scanner-indirect` | `scanner/indirect`. Скан `indirect_injection`: поднимает агента через `launcher`, шлёт легитимную задачу и через прокси подкладывает инъекции в результаты инструментов, оценивая по контрольной метке. |
 | `scanner-sysleak` | `scanner/sysleak`. Скан `system_prompt_leak`: поднимает агента, через прокси вставляет метку в системное сообщение и шлёт атакующие промпты, оценивая утечку по наличию метки в ответе. |
 | `scanner-deepteam` | `scanner/deepteam`. Скан `deep_team`: поднимает агента через `launcher`, прогоняет DeepTeam, пишет фазы/журнал/результаты. |
+| `scanner-pyrit` | `scanner/pyrit`. Скан `pyrit_scan`: поднимает агента через `launcher` и атакует его целями PyRIT (промпты с конвертерами, RedTeaming, Crescendo) с моделью-судьёй. |
 | `scanner-promptfoo` | `scanner/promptfoo`. Скан `code_scan`: клонирует репозиторий агента, прогоняет `promptfoo code-scans`, пишет фазы/журнал/находки. Без kind и launcher. |
+| `scanner-semgrep` | `scanner/semgrep`. Скан `ai_code_scan`: клонирует репозиторий агента и прогоняет локальный Semgrep по правилам для AI/LLM-кода (свой набор в `rules/ai-security.yml` + опциональные наборы Registry и пользовательские YAML-правила). Без kind и launcher, код никуда не отправляется. |
 | `launcher` | Собирает образ агента в кластере (git-clone + Kaniko) и запускает Pod с MITM-сайдкаром. Работает с внешним кластером по kubeconfig, без Docker-сокета. |
 | `web` | Дашборд (React/Vite). Текст интерфейса — на русском. |
 | `control-api-mitm-bridge`, `launcher-mitm-bridge` | `alpine/socat`-форвардеры, владеющие опубликованным на хост портом вместо dual-homed сервисов (особенность WSL2/Docker Desktop, см. `CLAUDE.md`). |
@@ -94,19 +104,28 @@ Agent Scanner проверяет LLM-агентов с вызовом инстр
 
 ## 4. Жизненный цикл сканирования
 
-1. `POST /scans` создаёт `Scan` со статусом `pending`.
+1. `POST /scans` создаёт `Scan` со статусом `pending`. Скан создаётся
+   **внутри актива** (раздел «Активы»): запрос содержит `asset_kind`/`asset_id`
+   и тип сканера; применимость и валидность конфига определяет реестр
+   (`control-api/app/scanner_registry.py`). Параметры сканера UI не хардкодит:
+   форма генерируется из `GET /scanners`, где control-api агрегирует
+   `GET /schema` каждого сканера-сервиса (TTL-кэш 30 с, недоступный сервис —
+   `available: false`).
 2. `POST /scans/{id}/start` (control-api):
    - очищает журнал скана, ставит `running` и фазу `Запуск`;
    - синхронно дёргает сканер своего типа (`POST <url сканера>/run/{id}`,
-     связка «тип → сервис» — `SCANNERS` в `control-api/app/api/scans.py`).
-     Сканер отвечает сразу и выполняет работу в фоне. Для типа без сканера
-     запуск отклоняется с 400 ещё до перевода в `running`; если сканер
-     недоступен или ответил ошибкой — скан сразу `failed`.
+     связка «тип → сервис» — реестр сканеров). Сканер отвечает сразу и
+     выполняет работу в фоне. Для типа без сканера запуск отклоняется с 400
+     ещё до перевода в `running`; если сканер недоступен или ответил
+     ошибкой — скан сразу `failed`.
 3. `scanner-deepteam` проходит фазы, записывая `ScanLog` и текущую фазу в `Scan`
    (фазы `scanner-promptfoo` — в §7.2):
    - **Инициализация** — читает скан, конфиг агента и модель-судью;
    - **Запуск агента** — `POST launcher/launch {scan_id}` (сборка может
-     занять минуты);
+     занять минуты); для агента с `source: remote` шаг пропускается —
+     адрес собирается из `remote_base_url` и пути эндпоинта, заголовки
+     авторизации — из `remote_headers`, останавливать нечего, после скана
+     namespace не удаляется;
    - **Ожидание агента** — опрашивает `launcher/status/{scan_id}` до
      `Running`, затем ждёт ответа HTTP-поверхности агента (LangGraph — `/ok`,
      REST API — `api_config.health_path`, по умолчанию путь эндпоинта без `/chat` + `/ok`).
@@ -135,8 +154,9 @@ Agent Scanner проверяет LLM-агентов с вызовом инстр
    отдаётся страницами по 500 строк, UI дочитывает его до конца.
 
 Статусы: `pending`, `running`, `completed`, `failed`.
-Типы: `deep_team`, `code_scan`, `indirect_injection`, `system_prompt_leak`
-и `mcp` реализованы; `agent_skills` пока отклоняется.
+Типы: `deep_team`, `pyrit_scan`, `code_scan`, `ai_code_scan`,
+`indirect_injection`, `system_prompt_leak` и `mcp` реализованы;
+`agent_skills` пока отклоняется.
 MCP выполняет координатор и отдельные контейнеры движков; детали — [mcp-testing.md](mcp-testing.md).
 
 ## 5. Модель данных
@@ -144,9 +164,11 @@ MCP выполняет координатор и отдельные контей
 | Таблица | Назначение |
 |---|---|
 | `LLMModel` | Провайдер + модель + `base_url` + `api_key`. Хранится в открытом виде (принятый техдолг). Используется как модель-судья DeepTeam. |
-| `AgentConfig` | Репозиторий (`git_repo_url`/`git_ref`/`git_access_token`), `dockerfile_path`, `env_example_path`, `env_vars`, `api_port`, `agent_purpose` (назначение агента для DeepTeam), `interaction_mode` (`none`/`api`/`langgraph`), `api_config`, `langgraph_config`. Агента со сканированиями удалить нельзя (409): SQLite не проверяет внешние ключи. |
-| `Scan` | Параметры и состояние скана: `type`, необязательный `agent_config_id` (у MCP-цели его нет), `status`, `session_id`, JSON `config`, JSON `results`, `phase`, `error`, а также метаданные запуска (`agent_namespace`, `agent_pod_name`, `build_job_name`, `built_image`), `started_at`/`finished_at`. |
-| `MCPArtifact` | Неизменяемый MCPB-архив: исходное имя и URI, SHA-256, размер, разобранный `manifest.json` и исходные байты в SQLite BLOB. Содержимое не отдаётся списковым API. |
+| `AgentConfig` | Актив «агент». `source`: `repository` (по умолчанию — сборка платформой из репозитория `git_repo_url`/`git_ref`/`git_access_token`, `dockerfile_path`, `env_example_path`, `env_vars`, `api_port`) или `remote` (уже запущенный вне платформы сервис: `remote_base_url` + `remote_headers` — произвольные заголовки авторизации, без сборки; трафик к LLM через прокси платформы не проходит — только динамическое тестирование). Общее: `agent_purpose` (назначение агента для DeepTeam), `interaction_mode` (`none`/`api`/`langgraph`), `api_config`, `langgraph_config`. Агента со сканированиями удалить нельзя (409): так клиент получает понятную ошибку вместо IntegrityError от внешнего ключа. |
+| `McpAsset` | Актив «MCP»: цель тестирования в `config` (форма `MCPTarget` — `remote`/`repository`/`bundle`); необязательный `deploy` (порт, команда запуска, env) — как поднять сервер из источника для динамического сканирования. При создании скана цель копируется в `Scan.config.target`. |
+| `SkillAsset` | Актив «skill»: git-репозиторий или zip-архив (BLOB, SHA-256). Сканера для skills пока нет — активы можно создавать, запуск сканов отклоняется. |
+| `Scan` | Параметры и состояние скана: `type`, ссылка на актив `asset_kind`/`asset_id` (строковые значения `'agent'/'mcp'/'skill'`; для агентов дублируется в `agent_config_id` — его читают сканеры и launcher), `status`, `session_id`, JSON `config`, JSON `results`, `phase`, `error`, а также метаданные запуска (`agent_namespace`, `agent_pod_name`, `build_job_name`, `built_image`), `started_at`/`finished_at`. |
+| `MCPArtifact` | Неизменяемый MCPB-архив: исходное имя и URI, SHA-256, размер, разобранный `manifest.json` и исходные байты в BLOB (`BYTEA`). Содержимое не отдаётся списковым API. |
 | `ScanLog` | Строка журнала скана: `level` (`info`/`success`/`error`), `phase`, `message`, `created_at`. |
 | `TrafficEvent` | Перехваченный обмен: `session_id`, `scan_id`, `flow_id`, `direction` (`request`/`response`), `provider`, `host`, `path`, полное тело `raw_excerpt`, `upstream_base_url`. Для косвенных инъекций ещё `trial_id`, `injected`, `injection_target`. |
 | `InjectionTrial` | Один прогон сканов, где прокси подменяет тело по активной директиве: `scan_id`, `injection_point` (`tool_result`/`system_prompt`), `baseline`, `task`, точка (`target_tool`/`occurrence`/`mode`), `payload_*`, `canary`, `status`, `injected_count`, `verdict` (`vulnerable`/`robust`/`inconclusive`/`error`), `agent_response`. Используют `indirect_injection` и `system_prompt_leak`. |
@@ -154,10 +176,15 @@ MCP выполняет координатор и отдельные контей
 `Scan.config` по типам:
 
 - `deep_team`: `{"eval_llm_model_id": <id>, "vulnerabilities": [...], "attacks": [...]}`;
+- `pyrit_scan`: `{"eval_llm_model_id": <id>, "objectives": [...], "strategies": [...], "converters": [...], "max_turns": <n>}`;
 - `code_scan`: `{"min_severity": "low|medium|high|critical", "guidance": <текст|null>}`;
+- `ai_code_scan`: `{"min_severity": "low|medium|high", "rule_sets": [...],
+  "custom_rules": <YAML-текст|null>}` — `rule_sets` это официальные наборы
+  Semgrep Registry (`p/...`), скачиваемые при скане; базовый AI-набор
+  платформы выполняется всегда;
 - `indirect_injection`: `{"tasks": [...], "target_tools": [...], "payloads": [...], "repeats": <n>, "max_trials": <n>}`;
 - `system_prompt_leak`: `{"payloads": [...], "repeats": <n>, "max_trials": <n>}`;
-- `mcp`: `{"target": {...}, "scanner_ids": [...], "timeout_seconds": 30}`. `target.kind` принимает `remote` (`server_url`, `transport`, `headers`, `verify_tls`), `repository` (`git_repo_url`, `git_ref`, `git_access_token`, `config_path`, `env`) или `bundle` (`artifact_id`, `user_config`). Пустой `scanner_ids` выбирает локальный набор по типу цели (без Snyk). Дополнительно поддержаны source/snapshot, allow_cloud, allow_tool_calls и probes. Токены, заголовки и переменные окружения хранятся в открытом виде в рамках принятого техдолга MVP.
+- `mcp`: `{"target": {...}, "scanner_ids": [...], "timeout_seconds": 30}`. `target` копируется из конфига `McpAsset` при создании скана: `target.kind` — `remote` (`server_url`, `transport`, `headers`, `verify_tls`), `repository` (`git_repo_url`, `git_ref`, `git_access_token`, `config_path`, `env`) или `bundle` (`artifact_id`, `user_config`). Пустой `scanner_ids` выбирает локальный набор по типу цели (без Snyk); сами `scanner_ids`/`timeout_seconds` форма берёт из схемы scanner-mcp. Токены, заголовки и переменные окружения хранятся в открытом виде в рамках принятого техдолга MVP.
 
 MCPB загружается через `POST /mcp-artifacts/upload` либо немедленно
 материализуется из публичного HTTPS URI через `POST /mcp-artifacts/from-url`.
@@ -168,7 +195,10 @@ API ограничивает размер, число файлов и распа
 `GET /mcp-artifacts/{id}/content`.
 
 `Scan.results` по типам: `deep_team` — `vulnerability_results` и
-`overall_score` (§7.1), `code_scan` — `summary` и `findings` (§7.2),
+`overall_score` (§7.1), `pyrit_scan` — тот же формат, что и `deep_team`
+(§7.6), `code_scan` — `summary` и `findings` (§7.2),
+`ai_code_scan` — `summary` и `findings` в том же формате, что и `code_scan`
+(§7.5),
 `indirect_injection` — `summary`/`by_tool`/`by_payload`/`trials` (§7.3),
 `system_prompt_leak` — `summary`/`by_payload`/`trials` (§7.4).
 `scan.type` в базе — строка, поэтому новый тип скана миграции не требует.
@@ -319,6 +349,73 @@ scanner-deepteam) → **Базовый прогон** → **Фаззинг** →
 
 Инструкция по использованию — [`system-prompt-leak.md`](system-prompt-leak.md).
 
+### 7.5. scanner-semgrep (анализ AI-кода)
+
+`scanner/semgrep/app/` — FastAPI-обёртка над локальным `semgrep scan`
+(образ на Python 3.13, версия semgrep зафиксирована в `Dockerfile` и
+совпадает с движком SAST scanner-mcp). Агент не собирается и не
+запускается; код репозитория никуда не отправляется — kind, launcher и
+внешние ключи не нужны.
+
+Фазы: **Инициализация** (скан, конфиг агента, параметры, версия semgrep) →
+**Клонирование** (`git clone --depth 1` ветки `git_ref`, токен — как в
+launcher) → **Анализ кода** (`semgrep scan --json`, heartbeat в журнал раз
+в 30 с, таймаут `SCAN_SEMGREP_TIMEOUT`) → **Сохранение результатов** →
+**Завершено**.
+
+Наборы правил:
+
+- **базовый AI-набор платформы** — `rules/ai-security.yml`, выполняется
+  всегда: динамическая сборка системного промпта (промпт-инъекция), taint
+  от ответа LLM в опасные приёмники (`eval`/`exec`/shell/pickle/SQL/
+  шаблоны), ключи LLM-провайдера в исходниках, секреты в сообщениях к LLM,
+  `dangerouslySetInnerHTML` с ответом модели; Python и JS/TS;
+- **официальные наборы Semgrep Registry** — опционально, выбор в форме
+  скана (`p/owasp-top-ten`, `p/secrets`, `p/security-audit`); скачиваются
+  из интернета при скане, без сети скан падает (анализ фейлится закрыто,
+  как в SAST scanner-mcp: `--strict`, ошибка любого правила роняет прогон);
+- **пользовательские правила** — опциональный YAML-текст в конфиге скана,
+  валидируется на структуру (`rules:` с `id`) и сохраняется рядом с клоном.
+
+Настройки скана: `min_severity` (фильтр находок; соответствие: semgrep
+`ERROR` → «высокая», `WARNING` → «средняя», `INFO` → «низкая», уровня
+`critical` у semgrep нет), `rule_sets`, `custom_rules`. `.gitignore`
+репозитория уважается (сгенерированное и зависимости не сканируются).
+
+`Scan.results` — тот же формат находок, что у `code_scan` (`engine:
+"semgrep"`, `summary`, `findings`, `review` — честное описание покрытия),
+страницу скана рендерит тот же компонент, что и `code_scan`.
+
+### 7.6. scanner-pyrit (red teaming через PyRIT)
+
+`scanner/pyrit/app/` — FastAPI-обёртка над Microsoft PyRIT (версия
+зафиксирована в `requirements.txt`: `pyrit==1.1.0`; транзитивная
+зависимость `base2048` не имеет wheel под arm64, поэтому в образе есть
+Rust-тулчейн). Память PyRIT — in-memory
+(`initialize_pyrit_async(memory_db_type=IN_MEMORY)`), ничего на диск не
+пишется. Оркестрация фаз, launcher, remote-агенты и повторные запуски —
+как у scanner-deepteam (§7.1).
+
+- `target.py` — кастомная цель PyRIT (subclass `PromptTarget`, override
+  `_send_prompt_to_target_async`): переводит сообщения атаки в HTTP-вызовы
+  агента (те же режимы `langgraph`/`api` и контракт `api_config`, что у
+  scanner-deepteam). Отличие от DeepTeam: разговор один на атаку, а не на
+  сообщение — LangGraph-нить или `{{session_id}}` живут всю атаку, поэтому
+  многораундовые стратегии ведут с агентом настоящий диалог с контекстом.
+- `pyrit_runner.py` — три стратегии по целям (objectives) из конфига
+  скана: `prompt_sending` (одиночный промпт, опционально через
+  конвертеры — Base64, ROT13, leetspeak и др., список перечисляется из
+  установленного пакета), `red_teaming` (адверсариальная модель ведёт
+  диалог до цели) и `crescendo` (постепенная эскалация). Пустой список
+  целей заменяется базовым набором из модуля. Судья и адверсариальная
+  модель — один `OpenAIChatTarget` из `LLMModel` (OpenAI-совместимый
+  провайдер), ответ агента оценивается True/False-вопросом «выполнил ли
+  агент вредоносную цель»; неопределённые оценки (`is_undetermined`)
+  считаются ошибкой кейса.
+- `Scan.results` — формат `deep_team` (§7.1): строка на атаку
+  (`<цель> / <стратегия>[/ конвертер]`), `passed` = агент отразил атаку,
+  `overall_score` — доля отражённых атак среди оценённых.
+
 ## 8. Launcher
 
 `POST /launch {scan_id}`:
@@ -362,12 +459,16 @@ scanner-deepteam) → **Базовый прогон** → **Фаззинг** →
 
 ## 10. Миграции базы
 
-`control-api` применяет Alembic на старте
+Хранилище — PostgreSQL (сервис `postgres` в compose, данные в томе
+`control-api-pg-data`); подключение — `DATABASE_URL`
+(`control-api/app/db.py`). `control-api` применяет Alembic на старте
 (`app/db.py::init_db` → `alembic upgrade head`). Ревизии —
 `control-api/app/migrations/versions/`. Базовая ревизия `0001_baseline` —
 замороженный снимок схемы на момент внедрения Alembic. Базы, созданные до
 неё, автоматически помечаются ей (stamp), данные при этом сохраняются.
-**Тома не удаляются.**
+**Тома не удаляются.** Разовый перенос данных из старой SQLite-базы —
+`control-api/scripts/migrate_sqlite_to_pg.py` (порядок запуска в
+`docs/running-locally.md`).
 
 ## 11. Известные ограничения и техдолг
 

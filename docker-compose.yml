@@ -1,10 +1,26 @@
 services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: agent_scanner
+      POSTGRES_PASSWORD: agent_scanner
+      POSTGRES_DB: agent_scanner
+    volumes:
+      - control-api-pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agent_scanner -d agent_scanner"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
   control-api:
     build: ./control-api
     ports:
       - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
     volumes:
-      - control-api-data:/data
       # Local Markdown knowledge library: drop .md files in and they show up
       # in the UI immediately, no rebuild -- see control-api/app/api/library.py.
       - ./library:/library:ro
@@ -12,13 +28,15 @@ services:
       # land on the host so they survive a restart and can be committed.
       - ./control-api/app/migrations/versions:/srv/app/migrations/versions
     environment:
-      CONTROL_API_DB_PATH: /data/control-api.db
+      DATABASE_URL: postgresql+psycopg://agent_scanner:agent_scanner@postgres:5432/agent_scanner
       DEMO_SESSION_ID: demo-session-1
       SEED_DEMO_DATA: "true"
       # Сканер выбирается по типу скана, см. control-api/app/api/scans.py.
       SCANNER_DEEPTEAM_URL: http://scanner-deepteam:8000
+      SCANNER_PYRIT_URL: http://scanner-pyrit:8000
       SCANNER_MCP_URL: http://scanner-mcp:8000
       SCANNER_PROMPTFOO_URL: http://scanner-promptfoo:8000
+      SCANNER_SEMGREP_URL: http://scanner-semgrep:8000
       SCANNER_INDIRECT_URL: http://scanner-indirect:8000
       SCANNER_SYSLEAK_URL: http://scanner-sysleak:8000
       LIBRARY_DIR: /library
@@ -81,6 +99,21 @@ services:
       control-api:
         condition: service_healthy
 
+  # Red teaming (PyRIT): поднимает агента через launcher и атакует его
+  # целями PyRIT (одиночные промпты с конвертерами, RedTeaming, Crescendo).
+  # Нужен kind (как scanner-deepteam).
+  scanner-pyrit:
+    build: ./scanner/pyrit
+    environment:
+      CONTROL_API_URL: http://control-api:8000
+      LAUNCHER_URL: http://launcher:8000
+    networks:
+      - default
+      - kind
+    depends_on:
+      control-api:
+        condition: service_healthy
+
   # Анализ кода (promptfoo code-scans): только клонирует репозиторий агента,
   # kind и launcher не нужны. Анализ выполняет облако Promptfoo.
   scanner-promptfoo:
@@ -96,6 +129,23 @@ services:
     depends_on:
       control-api:
         condition: service_healthy
+
+  # Анализ AI-кода (semgrep): клонирует репозиторий агента и прогоняет
+  # локальный semgrep по правилам для LLM-кода. kind и launcher не нужны,
+  # код никуда не отправляется.
+  scanner-semgrep:
+    build: ./scanner/semgrep
+    environment:
+      CONTROL_API_URL: http://control-api:8000
+      SCAN_SEMGREP_TIMEOUT: "1800"
+    depends_on:
+      control-api:
+        condition: service_healthy
+    init: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 2g
+    cpus: 2
 
   # Косвенные инъекции: поднимает агента через launcher, отправляет ему
   # легитимную задачу и через прокси подкладывает инъекцию в результаты его
@@ -301,5 +351,5 @@ networks:
     name: kind
 
 volumes:
-  control-api-data:
+  control-api-pg-data:
   mitm-dev-ca:

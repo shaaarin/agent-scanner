@@ -1,18 +1,36 @@
 # Local web development: docker compose -f compose.local.yml up -d --build
 services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: agent_scanner
+      POSTGRES_PASSWORD: agent_scanner
+      POSTGRES_DB: agent_scanner
+    volumes:
+      - control-api-pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agent_scanner -d agent_scanner"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+    restart: unless-stopped
+
   control-api:
     build: ./control-api
     ports:
       - "127.0.0.1:8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
     volumes:
-      - control-api-data:/data
       - ./library:/library:ro
       - ./control-api/app/migrations/versions:/srv/app/migrations/versions
     environment:
-      CONTROL_API_DB_PATH: /data/control-api.db
+      DATABASE_URL: postgresql+psycopg://agent_scanner:agent_scanner@postgres:5432/agent_scanner
       DEMO_SESSION_ID: demo-session-1
       LIBRARY_DIR: /library
       SCANNER_DEEPTEAM_URL: http://scanner-deepteam:8000
+      SCANNER_PYRIT_URL: http://scanner-pyrit:8000
       SCANNER_MCP_URL: http://scanner-mcp:8000
       SCANNER_PROMPTFOO_URL: http://scanner-promptfoo:8000
     healthcheck:
@@ -178,4 +196,4 @@ services:
     mem_limit: 256m
     cpus: 1
 volumes:
-  control-api-data:
+  control-api-pg-data:

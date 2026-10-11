@@ -112,6 +112,71 @@ def engines():
     return values
 
 
+@app.get("/schema")
+def schema():
+    """Описание полей конфига для динамической формы UI. Источник цели
+    (remote/repository/bundle) задаётся MCP-активом, поэтому схема содержит
+    только параметры самих проверок."""
+    if WORKER_ENGINE:
+        raise HTTPException(status_code=404)
+    return {
+        "type": "mcp",
+        "fields": [
+            {
+                "name": "scanner_ids",
+                "label": "Движки проверок",
+                "type": "enum_multi",
+                "required": False,
+                "default": [],
+                "options": [
+                    {
+                        "value": engine["id"],
+                        "label": engine["name"],
+                        "available": engine["available"],
+                        "cloud": engine["cloud"],
+                        "modes": engine["modes"],
+                        "description": engine["description"],
+                    }
+                    for engine in catalog()
+                ],
+                "help": "Пусто — локальный набор по типу цели (без Snyk).",
+            },
+            {
+                "name": "timeout_seconds",
+                "label": "Таймаут движка, сек",
+                "type": "integer",
+                "required": False,
+                "default": 30,
+                "help": "Максимум на один движок (1–300).",
+            },
+            {
+                "name": "probes",
+                "label": "Пробные вызовы",
+                "type": "json",
+                "required": False,
+                "default": [],
+                "help": "JSON-массив вызовов для динамического тестирования: {tool, arguments, contains, forbidden, expect_error}. Пусто — только инициализация и каталог.",
+            },
+            {
+                "name": "allow_tool_calls",
+                "label": "Разрешить вызовы инструментов",
+                "type": "boolean",
+                "required": False,
+                "default": False,
+                "help": "Подтверждение запуска на своём тестовом сервере; с непустыми probes обязателен.",
+            },
+            {
+                "name": "allow_cloud",
+                "label": "Передавать каталог в облако (Snyk)",
+                "type": "boolean",
+                "required": False,
+                "default": False,
+                "help": "Требуется для движка Snyk; нужен SNYK_TOKEN.",
+            },
+        ],
+    }
+
+
 @app.post("/execute")
 def execute_task(task: dict):
     if not WORKER_ENGINE or task.get("engine") != WORKER_ENGINE:

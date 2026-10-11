@@ -247,6 +247,10 @@ def _run(scan_id: int, launched: list[bool]) -> None:
     _log(scan_id, f"Атакующих промптов: {len(payloads)}, повторов: {repeats}, лимит прогонов: {max_trials}", phase="Инициализация")
 
     _set_phase(scan_id, "Запуск агента")
+    if agent_config.get("source") == "remote":
+        # Инъекцию ставит MITM-прокси в трафик агента к LLM; трафик
+        # remote-агента через прокси платформы не проходит.
+        raise RuntimeError("скан утечки системного промпта не работает с remote-агентом: его трафик к LLM не проходит через прокси платформы")
     _log(scan_id, "Сборка и запуск агента через launcher (это может занять несколько минут)...", phase="Запуск агента")
     with httpx.Client(timeout=_BUILD_TIMEOUT) as client:
         resp = client.post(f"{LAUNCHER_URL}/launch", json={"scan_id": scan_id})

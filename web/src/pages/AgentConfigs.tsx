@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { api, launcherApi } from "../api/client";
-import type { AgentConfig, InteractionMode } from "../api/types";
-import { PageHeader } from "../components/PageHeader";
+import type { AgentConfig, AgentSource, InteractionMode } from "../api/types";
 
 type EnvRow = { key: string; value: string };
 
@@ -68,6 +68,20 @@ function renderRequestPreview(
   }
 }
 
+// Короткая форма адреса для таблицы (как в LLM-моделях): хост + начало
+// пути, полный адрес -- в title.
+function shortenBaseUrl(raw: string): string {
+  try {
+    const url = new URL(raw);
+    const path = url.pathname.replace(/\/+$/, "");
+    const maxPath = 16;
+    const trimmed = path.length > maxPath ? `${path.slice(0, maxPath)}…` : path;
+    return `${url.host}${trimmed}${url.search ? "…" : ""}`;
+  } catch {
+    return raw.length > 32 ? `${raw.slice(0, 32)}…` : raw;
+  }
+}
+
 const interactionModeLabel: Record<string, string> = {
   none: "Без диалога",
   api: "REST API",
@@ -80,6 +94,7 @@ function repoNameFromUrl(url: string): string {
 }
 
 export function AgentConfigs() {
+  const navigate = useNavigate();
   const [configs, setConfigs] = useState<AgentConfig[]>([]);
   const [showForm, setShowForm] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -97,7 +112,7 @@ export function AgentConfigs() {
   // (exclude_unset semantics server-side, so partial updates are fine)
   // instead of POSTing a brand new one at the end.
   const [draftId, setDraftId] = useState<number | null>(null);
-  const [wizardStep, setWizardStep] = useState<"repo" | "configure">("repo");
+  const [wizardStep, setWizardStep] = useState<"repo" | "config" | "deploy">("repo");
   const [loadingRepo, setLoadingRepo] = useState(false);
   const [inspecting, setInspecting] = useState(false);
   const [branches, setBranches] = useState<string[]>([]);
@@ -106,9 +121,12 @@ export function AgentConfigs() {
   const [selectedEnvExample, setSelectedEnvExample] = useState("");
 
   const [name, setName] = useState("");
+  const [source, setSource] = useState<AgentSource>("repository");
   const [gitRepoUrl, setGitRepoUrl] = useState("");
   const [gitRef, setGitRef] = useState("main");
   const [gitAccessToken, setGitAccessToken] = useState("");
+  const [remoteBaseUrl, setRemoteBaseUrl] = useState("");
+  const [remoteHeaderRows, setRemoteHeaderRows] = useState<EnvRow[]>(emptyEnv);
   const [dockerfilePath, setDockerfilePath] = useState("Dockerfile");
   const [envExamplePath, setEnvExamplePath] = useState("");
   const [apiPort, setApiPort] = useState("");
@@ -143,13 +161,21 @@ export function AgentConfigs() {
     load();
   }, []);
 
+  // Списки под две таблицы: у источников разные наборы полей. Отсутствие
+  // source (старые записи до миграции 0008) трактуется как repository.
+  const repoConfigs = configs.filter((c) => (c.source ?? "repository") === "repository");
+  const remoteConfigs = configs.filter((c) => c.source === "remote");
+
   function updateEnvRow(i: number, field: "key" | "value", value: string) {
     setEnvRows((rows) => rows.map((r, idx) => (idx === i ? { ...r, [field]: value } : r)));
   }
 
   function resetForm() {
     setName("");
+    setSource("repository");
     setGitRepoUrl("");
+    setRemoteBaseUrl("");
+    setRemoteHeaderRows(emptyEnv);
     setGitRef("main");
     setGitAccessToken("");
     setDockerfilePath("Dockerfile");
@@ -182,7 +208,11 @@ export function AgentConfigs() {
   function handleEdit(c: AgentConfig) {
     setEditingId(c.id);
     setName(c.name);
-    setGitRepoUrl(c.git_repo_url);
+    setSource(c.source ?? "repository");
+    setGitRepoUrl(c.git_repo_url ?? "");
+    setRemoteBaseUrl(c.remote_base_url ?? "");
+    const remoteHeaderEntries = Object.entries(c.remote_headers ?? {}).map(([key, value]) => ({ key, value }));
+    setRemoteHeaderRows(remoteHeaderEntries.length ? remoteHeaderEntries : emptyEnv);
     setGitRef(c.git_ref);
     setGitAccessToken(c.git_access_token ?? "");
     setDockerfilePath(c.dockerfile_path);
@@ -296,6 +326,7 @@ export function AgentConfigs() {
 
       const draftFields = {
         name: name.trim() || `${repoNameFromUrl(gitRepoUrl)}-${Math.random().toString(36).slice(2, 6)}`,
+        source: "repository",
         git_repo_url: gitRepoUrl,
         git_ref: defaultBranch,
         git_access_token: gitAccessToken || null,
@@ -309,8 +340,41 @@ export function AgentConfigs() {
         setName(draft.name);
       }
 
-      setWizardStep("configure");
+      setWizardStep("config");
       await loadInspect(defaultBranch);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setLoadingRepo(false);
+    }
+  }
+
+  // Remote-агент: черновик создаётся сразу с адресом и токеном, без
+  // обращения к launcher (нечего инспектировать).
+  async function handleRemoteNext() {
+    setError(null);
+    const base = remoteBaseUrl.trim();
+    if (!/^https?:\/\//i.test(base)) {
+      setError("Адрес агента должен начинаться с http:// или https://");
+      return;
+    }
+    setLoadingRepo(true);
+    try {
+      const draftFields = {
+        name: name.trim() || `${repoNameFromUrl(base)}-remote-${Math.random().toString(36).slice(2, 6)}`,
+        source: "remote",
+        remote_base_url: base,
+        remote_headers: Object.fromEntries(remoteHeaderRows.filter((h) => h.key.trim()).map((h) => [h.key.trim(), h.value])),
+        agent_purpose: agentPurpose.trim() || null,
+      };
+      if (draftId) {
+        await api.put(`/agent-configs/${draftId}`, draftFields);
+      } else {
+        const draft = await api.post<AgentConfig>("/agent-configs", draftFields);
+        setDraftId(draft.id);
+        setName(draft.name);
+      }
+      setWizardStep("config");
     } catch (e) {
       setError(String(e));
     } finally {
@@ -361,9 +425,15 @@ export function AgentConfigs() {
 
     const payload = {
       name,
-      git_repo_url: gitRepoUrl,
+      source,
+      git_repo_url: source === "repository" ? gitRepoUrl : null,
       git_ref: gitRef,
       git_access_token: gitAccessToken || null,
+      remote_base_url: source === "remote" ? remoteBaseUrl.trim() : null,
+      remote_headers:
+        source === "remote"
+          ? Object.fromEntries(remoteHeaderRows.filter((h) => h.key.trim()).map((h) => [h.key.trim(), h.value]))
+          : null,
       dockerfile_path: dockerfilePath,
       env_example_path: envExamplePath || null,
       api_port: apiPort ? Number(apiPort) : null,
@@ -405,30 +475,100 @@ export function AgentConfigs() {
     load();
   }
 
-  // Shared between the wizard's step 2 and the flat edit form.
+  // Источник агента: сборка из git или уже запущенный сервис. Общий для
+  // визарда и плоской формы редактирования.
+  function updateRemoteHeaderRow(i: number, field: "key" | "value", value: string) {
+    setRemoteHeaderRows((rows) => rows.map((r, idx) => (idx === i ? { ...r, [field]: value } : r)));
+  }
+
+  function renderRemoteHeaders() {
+    return (
+      <div className="field">
+        <label>Заголовки авторизации · имя + значение</label>
+        {remoteHeaderRows.map((row, i) => (
+          <div key={i} style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+            <input
+              placeholder="Authorization"
+              value={row.key}
+              onChange={(e) => updateRemoteHeaderRow(i, "key", e.target.value)}
+            />
+            <input
+              placeholder="Bearer eyJhbGci..."
+              value={row.value}
+              onChange={(e) => updateRemoteHeaderRow(i, "value", e.target.value)}
+              autoComplete="off"
+            />
+          </div>
+        ))}
+        <button type="button" className="btn btn-secondary" onClick={() => setRemoteHeaderRows((r) => [...r, { key: "", value: "" }])}>
+          + Добавить заголовок
+        </button>
+        <p style={{ fontSize: 12, color: "var(--text-500)", margin: "0.4rem 0 0" }}>
+          Уходят с каждым запросом платформы к агенту, например Authorization: Bearer ... или X-API-Key.
+        </p>
+      </div>
+    );
+  }
+
+  function renderSourceSwitch() {
+    return (
+      <div className="field">
+        <label>Источник агента</label>
+        <div style={{ display: "flex", gap: "0.5rem" }}>
+          <button
+            type="button"
+            className={`btn ${source === "repository" ? "btn-primary" : "btn-secondary"}`}
+            onClick={() => setSource("repository")}
+          >
+            Из исходников (Git)
+          </button>
+          <button
+            type="button"
+            className={`btn ${source === "remote" ? "btn-primary" : "btn-secondary"}`}
+            onClick={() => setSource("remote")}
+          >
+            Уже запущен (Remote)
+          </button>
+        </div>
+        {source === "remote" && (
+          <p style={{ fontSize: 12, color: "var(--text-600)", margin: "0.4rem 0 0" }}>
+            Платформа не собирает и не запускает агента: она ходит напрямую по указанному адресу. Трафик такого агента к LLM не проходит через прокси платформы, поэтому доступно только динамическое тестирование.
+          </p>
+        )}
+      </div>
+    );
+  }
+
+  // Shared between the wizard's step 2 and the flat edit form. Порт API и
+  // переменные окружения касаются только агентов, собираемых из исходников:
+  // remote-агент уже запущен -- ему нечего пробрасывать и нечем задавать env.
   function renderConfigureFields() {
     return (
       <>
-        <div className="field">
-          <label>Переменные окружения</label>
-          {envRows.map((row, i) => (
-            <div key={i} style={{ display: "flex", gap: 8, marginBottom: 8 }}>
-              <input placeholder="KEY" value={row.key} onChange={(e) => updateEnvRow(i, "key", e.target.value)} />
-              <input placeholder="значение" value={row.value} onChange={(e) => updateEnvRow(i, "value", e.target.value)} />
+        {source === "repository" && (
+          <>
+            <div className="field">
+              <label>Переменные окружения</label>
+              {envRows.map((row, i) => (
+                <div key={i} style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+                  <input placeholder="KEY" value={row.key} onChange={(e) => updateEnvRow(i, "key", e.target.value)} />
+                  <input placeholder="значение" value={row.value} onChange={(e) => updateEnvRow(i, "value", e.target.value)} />
+                </div>
+              ))}
+              <button type="button" className="btn btn-secondary" onClick={() => setEnvRows((r) => [...r, { key: "", value: "" }])}>
+                + Добавить переменную
+              </button>
             </div>
-          ))}
-          <button type="button" className="btn btn-secondary" onClick={() => setEnvRows((r) => [...r, { key: "", value: "" }])}>
-            + Добавить переменную
-          </button>
-        </div>
 
-        <div className="field">
-          <label>Порт API · необязательно</label>
-          <input value={apiPort} onChange={(e) => setApiPort(e.target.value)} placeholder="8123" />
-          <p style={{ fontSize: 12, color: "var(--text-500)", margin: "0.4rem 0 0" }}>
-            Если указать порт, платформа сама пробросит адрес агента после запуска.
-          </p>
-        </div>
+            <div className="field">
+              <label>Порт API · необязательно</label>
+              <input value={apiPort} onChange={(e) => setApiPort(e.target.value)} placeholder="8123" />
+              <p style={{ fontSize: 12, color: "var(--text-500)", margin: "0.4rem 0 0" }}>
+                Если указать порт, платформа сама пробросит адрес агента после запуска.
+              </p>
+            </div>
+          </>
+        )}
 
         <div className="field">
           <label>Режим взаимодействия</label>
@@ -444,8 +584,10 @@ export function AgentConfigs() {
             <p style={{ fontSize: 12, color: "var(--text-500)", margin: "0 0 1.2rem" }}>
               Любой HTTP API агента. Плейсхолдеры: <code>{"{{message}}"}</code> — сообщение атаки,{" "}
               <code>{"{{session_id}}"}</code> — новый id на каждый разговор. Их можно ставить в путь и
-              параметры URL, заголовки и тело. Если задан «Порт API», хост и порт в URL платформа
-              подставит сама — достаточно пути, например <code>/chat</code>.
+              параметры URL, заголовки и тело.
+              {source === "repository"
+                ? " Если задан «Порт API», хост и порт в URL платформа подставит сама — достаточно пути, например /chat."
+                : " Для remote-агента укажите адрес вместе с путём либо base URL выше и путь, например /chat."}
             </p>
             <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr", gap: "1.6rem" }}>
               <div className="field">
@@ -546,9 +688,9 @@ export function AgentConfigs() {
         {interactionMode === "langgraph" && (
           <>
             <p style={{ fontSize: 12, color: "var(--text-500)", margin: "0 0 1.2rem" }}>
-              Базовый URL обычно указывать не нужно: если заполнен «Порт API», платформа
-              определит адрес сама после запуска агента. Укажите его вручную только если
-              порт не задан (например, адрес проброшен через <code>kubectl expose</code>).
+              {source === "remote"
+                ? "Для remote-агента укажите базовый URL вручную (например, https://agent.example.com) — платформа подставит его сама."
+                : "Базовый URL обычно указывать не нужно: если заполнен «Порт API», платформа определит адрес сама после запуска агента. Укажите его вручную только если порт не задан (например, адрес проброшен через kubectl expose)."}
             </p>
             <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr", gap: "1.6rem" }}>
               <div className="field">
@@ -572,15 +714,12 @@ export function AgentConfigs() {
 
   return (
     <div>
-      <PageHeader
-        title="Конфигурации агентов"
-        description="Репозиторий, параметры запуска и способ общения с тестируемым агентом. Учётные данные его LLM-провайдера платформа перехватывает сама — отдельно указывать их не нужно."
-        actions={
-          <button className="btn" onClick={() => (showForm ? handleCancel() : setShowForm(true))}>
-            {showForm ? "Отмена" : "Новая конфигурация"}
-          </button>
-        }
-      />
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem" }}>
+        <h2 style={{ margin: 0 }}>Агенты</h2>
+        <button className="btn" onClick={() => (showForm ? handleCancel() : setShowForm(true))}>
+          {showForm ? "Отмена" : "+ Добавить агента"}
+        </button>
+      </div>
 
       {error && (
         <div className="card" style={{ borderColor: "var(--status-negative)", marginBottom: "1.6rem" }}>
@@ -603,33 +742,53 @@ export function AgentConfigs() {
               placeholder="Ассистент службы поддержки интернет-магазина книг."
             />
           </div>
-          <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr", gap: "1.6rem" }}>
-            <div className="field">
-              <label>Репозиторий (git URL)</label>
-              <input value={gitRepoUrl} onChange={(e) => setGitRepoUrl(e.target.value)} required />
-            </div>
-            <div className="field">
-              <label>Ветка / тег</label>
-              <input value={gitRef} onChange={(e) => setGitRef(e.target.value)} placeholder="main" />
-            </div>
-            <div className="field">
-              <label>Путь к Dockerfile</label>
-              <input value={dockerfilePath} onChange={(e) => setDockerfilePath(e.target.value)} placeholder="Dockerfile" />
-            </div>
-          </div>
-          <div className="field">
-            <label>Токен доступа · только для приватных репозиториев по HTTPS</label>
-            <input
-              type="password"
-              value={gitAccessToken}
-              onChange={(e) => setGitAccessToken(e.target.value)}
-              placeholder="ghp_... / glpat-..."
-            />
-          </div>
-          <div className="field">
-            <label>Файл .env.example · необязательно</label>
-            <input value={envExamplePath} onChange={(e) => setEnvExamplePath(e.target.value)} placeholder=".env.example" />
-          </div>
+          {renderSourceSwitch()}
+          {source === "repository" && (
+            <>
+              <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr", gap: "1.6rem" }}>
+                <div className="field">
+                  <label>Репозиторий (git URL)</label>
+                  <input value={gitRepoUrl} onChange={(e) => setGitRepoUrl(e.target.value)} required />
+                </div>
+                <div className="field">
+                  <label>Ветка / тег</label>
+                  <input value={gitRef} onChange={(e) => setGitRef(e.target.value)} placeholder="main" />
+                </div>
+                <div className="field">
+                  <label>Путь к Dockerfile</label>
+                  <input value={dockerfilePath} onChange={(e) => setDockerfilePath(e.target.value)} placeholder="Dockerfile" />
+                </div>
+              </div>
+              <div className="field">
+                <label>Токен доступа · только для приватных репозиториев по HTTPS</label>
+                <input
+                  type="password"
+                  value={gitAccessToken}
+                  onChange={(e) => setGitAccessToken(e.target.value)}
+                  placeholder="ghp_... / glpat-..."
+                />
+              </div>
+              <div className="field">
+                <label>Файл .env.example · необязательно</label>
+                <input value={envExamplePath} onChange={(e) => setEnvExamplePath(e.target.value)} placeholder=".env.example" />
+              </div>
+            </>
+          )}
+          {source === "remote" && (
+            <>
+              <div className="field">
+                <label>Адрес агента (base URL)</label>
+                <input
+                  type="url"
+                  value={remoteBaseUrl}
+                  onChange={(e) => setRemoteBaseUrl(e.target.value)}
+                  placeholder="https://agent.example.com"
+                  required
+                />
+              </div>
+              {renderRemoteHeaders()}
+            </>
+          )}
 
           {renderConfigureFields()}
 
@@ -639,9 +798,11 @@ export function AgentConfigs() {
 
       {showForm && !editingId && wizardStep === "repo" && (
         <div className="card" style={{ marginBottom: "2.4rem" }}>
-          <h2 style={{ marginTop: 0 }}>Шаг 1. Репозиторий</h2>
+          <h2 style={{ marginTop: 0 }}>Шаг 1. Источник агента</h2>
           <p style={{ fontSize: 13, color: "var(--text-500)", margin: "0 0 1.6rem" }}>
-            Укажите репозиторий агента — дальше платформа сама найдёт ветки, Dockerfile и пример переменных окружения.
+            {source === "repository"
+              ? "Укажите репозиторий агента — дальше платформа сама найдёт ветки, Dockerfile и пример переменных окружения."
+              : "Агент уже запущен вне платформы: укажите его адрес и токен — сборка и запуск не потребуются."}
           </p>
           <div className="field">
             <label>Название конфигурации</label>
@@ -656,32 +817,59 @@ export function AgentConfigs() {
               placeholder="Ассистент службы поддержки интернет-магазина книг."
             />
           </div>
-          <div className="field">
-            <label>Репозиторий (git URL)</label>
-            <input
-              value={gitRepoUrl}
-              onChange={(e) => setGitRepoUrl(e.target.value)}
-              placeholder="https://gitlab.com/org/agent-repo.git"
-              required
-            />
-          </div>
-          <div className="field">
-            <label>Токен доступа · только для приватных репозиториев по HTTPS</label>
-            <input
-              type="password"
-              value={gitAccessToken}
-              onChange={(e) => setGitAccessToken(e.target.value)}
-              placeholder="ghp_... / glpat-..."
-            />
-          </div>
-          <button
-            className="btn"
-            type="button"
-            onClick={handleLoadRepo}
-            disabled={loadingRepo || !gitRepoUrl}
-          >
-            {loadingRepo ? "Загрузка…" : "Загрузить репозиторий"}
-          </button>
+          {renderSourceSwitch()}
+          {source === "repository" ? (
+            <>
+              <div className="field">
+                <label>Репозиторий (git URL)</label>
+                <input
+                  value={gitRepoUrl}
+                  onChange={(e) => setGitRepoUrl(e.target.value)}
+                  placeholder="https://gitlab.com/org/agent-repo.git"
+                  required
+                />
+              </div>
+              <div className="field">
+                <label>Токен доступа · только для приватных репозиториев по HTTPS</label>
+                <input
+                  type="password"
+                  value={gitAccessToken}
+                  onChange={(e) => setGitAccessToken(e.target.value)}
+                  placeholder="ghp_... / glpat-..."
+                />
+              </div>
+              <button
+                className="btn"
+                type="button"
+                onClick={handleLoadRepo}
+                disabled={loadingRepo || !gitRepoUrl}
+              >
+                {loadingRepo ? "Загрузка…" : "Загрузить репозиторий"}
+              </button>
+            </>
+          ) : (
+            <>
+              <div className="field">
+                <label>Адрес агента (base URL)</label>
+                <input
+                  type="url"
+                  value={remoteBaseUrl}
+                  onChange={(e) => setRemoteBaseUrl(e.target.value)}
+                  placeholder="https://agent.example.com"
+                  required
+                />
+              </div>
+              {renderRemoteHeaders()}
+              <button
+                className="btn"
+                type="button"
+                onClick={handleRemoteNext}
+                disabled={loadingRepo || !remoteBaseUrl}
+              >
+                {loadingRepo ? "Сохранение…" : "Далее · настройка запросов"}
+              </button>
+            </>
+          )}
           {!name && (
             <p style={{ fontSize: 12, color: "var(--text-500)", margin: "0.6rem 0 0" }}>
               Название можно задать позже, на шаге 2.
@@ -690,24 +878,69 @@ export function AgentConfigs() {
         </div>
       )}
 
-      {showForm && !editingId && wizardStep === "configure" && (
+      {showForm && !editingId && wizardStep === "config" && (
         <form className="card" onSubmit={handleSubmit} style={{ marginBottom: "2.4rem" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <h2 style={{ marginTop: 0 }}>Шаг 2. Настройка</h2>
+            <h2 style={{ marginTop: 0 }}>{source === "remote" ? "Шаг 2. Настройка запросов" : "Шаг 2. Репозиторий склонирован"}</h2>
             <button type="button" className="btn btn-secondary" onClick={() => setWizardStep("repo")}>
-              ← К репозиторию
+              {source === "remote" ? "← К адресу" : "← К репозиторию"}
             </button>
           </div>
 
+          {source === "remote" ? (
+            <>
+              <div className="field">
+                <label>Адрес агента (base URL)</label>
+                <input
+                  type="url"
+                  value={remoteBaseUrl}
+                  onChange={(e) => setRemoteBaseUrl(e.target.value)}
+                  placeholder="https://agent.example.com"
+                  required
+                />
+              </div>
+              {renderRemoteHeaders()}
+              {renderConfigureFields()}
+              <button className="btn" type="submit" style={{ marginTop: "1.6rem" }}>Создать</button>
+            </>
+          ) : (
+            <>
+              <p style={{ fontSize: 13, color: "var(--text-500)", margin: "0 0 1.6rem" }}>
+                Выберите ветку из доступных. Дальше можно создать агента сразу — или настроить деплой для динамического тестирования.
+              </p>
+              <div className="field">
+                <label>Ветка</label>
+                <select value={gitRef} onChange={(e) => handleBranchChange(e.target.value)} disabled={inspecting}>
+                  {branches.map((b) => (
+                    <option key={b} value={b}>{b}</option>
+                  ))}
+                </select>
+              </div>
+              <div style={{ display: "flex", gap: "0.6rem", marginTop: "1.6rem" }}>
+                <button className="btn" type="submit" disabled={inspecting}>Создать агента</button>
+                <button className="btn btn-secondary" type="button" onClick={() => setWizardStep("deploy")} disabled={inspecting}>
+                  Настроить деплой
+                </button>
+              </div>
+            </>
+          )}
+        </form>
+      )}
+
+      {showForm && !editingId && wizardStep === "deploy" && (
+        <form className="card" onSubmit={handleSubmit} style={{ marginBottom: "2.4rem" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <h2 style={{ marginTop: 0 }}>Шаг 3. Деплой · необязательно</h2>
+            <button type="button" className="btn btn-secondary" onClick={() => setWizardStep("config")}>
+              ← К ветке
+            </button>
+          </div>
+          <p style={{ fontSize: 13, color: "var(--text-500)", margin: "0 0 1.6rem" }}>
+            Как собрать и запустить агента для динамического тестирования. Необязательно: без этих настроек агент
+            доступен для анализа кода, а при сканах платформа использует значения по умолчанию.
+          </p>
+
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1.6rem" }}>
-            <div className="field">
-              <label>Ветка</label>
-              <select value={gitRef} onChange={(e) => handleBranchChange(e.target.value)} disabled={inspecting}>
-                {branches.map((b) => (
-                  <option key={b} value={b}>{b}</option>
-                ))}
-              </select>
-            </div>
             <div className="field">
               <label>Dockerfile</label>
               {dockerfiles.length > 0 ? (
@@ -725,63 +958,122 @@ export function AgentConfigs() {
                 </p>
               )}
             </div>
-          </div>
-
-          <div className="field">
-            <label>.env.example</label>
-            <select value={selectedEnvExample} onChange={(e) => handleEnvExampleChange(e.target.value)} disabled={inspecting}>
-              <option value="">Нет</option>
-              {Object.keys(envExamples).map((p) => (
-                <option key={p} value={p}>{p}</option>
-              ))}
-            </select>
-            {inspecting && <p style={{ fontSize: 12, color: "var(--text-600)", margin: "0.4rem 0 0" }}>Анализ репозитория…</p>}
+            <div className="field">
+              <label>.env.example</label>
+              <select value={selectedEnvExample} onChange={(e) => handleEnvExampleChange(e.target.value)} disabled={inspecting}>
+                <option value="">Нет</option>
+                {Object.keys(envExamples).map((p) => (
+                  <option key={p} value={p}>{p}</option>
+                ))}
+              </select>
+            </div>
           </div>
 
           {renderConfigureFields()}
 
-          <button className="btn" type="submit" style={{ marginTop: "1.6rem" }} disabled={inspecting}>Создать</button>
+          <button className="btn" type="submit" style={{ marginTop: "1.6rem" }} disabled={inspecting}>Создать агента</button>
         </form>
       )}
 
-      <div className="card" style={{ padding: 0, overflow: "hidden" }}>
-        <table>
-          <thead>
-            <tr>
-              <th>Название</th>
-              <th>Репозиторий</th>
-              <th>Ветка</th>
-              <th>Переменные</th>
-              <th>Взаимодействие</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {configs.map((c) => (
-              <tr key={c.id}>
-                <td><strong>{c.name}</strong></td>
-                <td><code>{c.git_repo_url}</code></td>
-                <td>{c.git_ref}</td>
-                <td>{Object.keys(c.env_vars).length}</td>
-                <td><span className="badge badge-neutral">{interactionModeLabel[c.interaction_mode] ?? c.interaction_mode}</span></td>
-                <td>
-                  <div style={{ display: "flex", gap: 8 }}>
-                    <button className="btn btn-secondary" onClick={() => handleEdit(c)}>Изменить</button>
-                    <button className="btn btn-secondary" onClick={() => handleDelete(c.id)}>Удалить</button>
-                  </div>
-                </td>
-              </tr>
-            ))}
-            {configs.length === 0 && (
+      {/* Две таблицы по источникам: у сборки из git и у remote свои поля.
+          Пустая показывается только общая заглушка, если нет ни тех, ни других. */}
+      {configs.length === 0 && (
+        <div className="card" style={{ padding: "2.4rem", textAlign: "center", color: "var(--text-500)" }}>
+          Пока нет конфигураций. Добавьте агента, чтобы начать.
+        </div>
+      )}
+
+      {repoConfigs.length > 0 && (
+        <div className="card" style={{ padding: 0, overflow: "hidden", marginBottom: remoteConfigs.length ? "2.4rem" : undefined }}>
+          <table>
+            <thead>
               <tr>
-                <td colSpan={6} style={{ color: "var(--text-500)", padding: "2.4rem", textAlign: "center" }}>
-                  Пока нет конфигураций. Добавьте агента, чтобы начать.
-                </td>
+                <th style={{ width: "100%" }}>Название</th>
+                <th>Репозиторий</th>
+                <th>Ветка</th>
+                <th>Взаимодействие</th>
+                <th></th>
               </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
+            </thead>
+            <tbody>
+              {repoConfigs.map((c) => (
+                <tr key={c.id}>
+                  <td>
+                    <button
+                      className="btn btn-sm btn-secondary"
+                      onClick={() => navigate(`/assets/agent/${c.id}`)}
+                      title="Открыть актив и его сканирования"
+                    >
+                      {c.name}
+                    </button>
+                    <span className="badge badge-neutral" style={{ marginLeft: "0.5rem" }}>есть код</span>
+                    {(c.api_port != null || c.interaction_mode !== "none") && (
+                      <span className="badge badge-success" style={{ marginLeft: "0.4rem" }}>живой сервис</span>
+                    )}
+                  </td>
+                  <td style={{ maxWidth: 260, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    <code title={c.git_repo_url ?? undefined}>{c.git_repo_url}</code>
+                  </td>
+                  <td>{c.git_ref}</td>
+                  <td><span className="badge badge-neutral">{interactionModeLabel[c.interaction_mode] ?? c.interaction_mode}</span></td>
+                  <td style={{ textAlign: "right" }}>
+                    <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+                      <button className="btn btn-secondary" onClick={() => handleEdit(c)}>Изменить</button>
+                      <button className="btn btn-secondary" onClick={() => handleDelete(c.id)}>Удалить</button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {remoteConfigs.length > 0 && (
+        <div className="card" style={{ padding: 0, overflow: "hidden" }}>
+          {/* fixed-раскладка и три равные колонки: центр «Адрес» совпадает с
+              серединой между центрами «Название» и «Взаимодействие». */}
+          <table style={{ width: "100%", tableLayout: "fixed", borderCollapse: "collapse" }}>
+            <thead>
+              <tr>
+                <th style={{ width: "26%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>Название</th>
+                <th style={{ width: "26%", textAlign: "center" }}>Адрес</th>
+                <th style={{ width: "26%" }}>Взаимодействие</th>
+                <th style={{ width: "22%" }}></th>
+              </tr>
+            </thead>
+            <tbody>
+              {remoteConfigs.map((c) => (
+                <tr key={c.id}>
+                  <td style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    <button
+                      className="btn btn-sm btn-secondary"
+                      onClick={() => navigate(`/assets/agent/${c.id}`)}
+                      title="Открыть актив и его сканирования"
+                    >
+                      {c.name}
+                    </button>
+                    <span className="badge badge-success" style={{ marginLeft: "0.5rem" }}>живой сервис</span>
+                  </td>
+                  <td
+                    title={c.remote_base_url ?? undefined}
+                    style={{ textAlign: "center", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                  >
+                    <code>{shortenBaseUrl(c.remote_base_url ?? "")}</code>
+                  </td>
+                  <td><span className="badge badge-neutral">{interactionModeLabel[c.interaction_mode] ?? c.interaction_mode}</span></td>
+                  <td style={{ textAlign: "right" }}>
+                    <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+                      <button className="btn btn-secondary" onClick={() => handleEdit(c)}>Изменить</button>
+                      <button className="btn btn-secondary" onClick={() => handleDelete(c.id)}>Удалить</button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }

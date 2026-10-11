@@ -1,5 +1,4 @@
 import json
-import os
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -9,34 +8,25 @@ from pydantic import ValidationError
 from sqlmodel import Session, delete, select
 
 from app.db import engine, get_session
-from app.models import AgentConfig, InjectionTrial, MCPArtifact, Scan, ScanLog, ScanLogLevel, ScanStatus, ScanType, TrafficEvent
-from app.schemas import MCPBundleTarget, MCPScanConfig, ScanLogCreate, ScanUpdate
-from app.mcp_config import upgrade_flat, validate_mcp_config
+from app.models import (
+    AgentConfig,
+    AgentSource,
+    AssetKind,
+    InjectionTrial,
+    MCPArtifact,
+    McpAsset,
+    Scan,
+    ScanLog,
+    ScanLogLevel,
+    ScanStatus,
+    ScanType,
+    TrafficEvent,
+)
+from app.schemas import MCPScanConfig, ScanCreate, ScanLogCreate, ScanUpdate
+from app.mcp_config import upgrade_flat
+from app.scanner_registry import find
 
 router = APIRouter(prefix="/scans", tags=["scans"])
-
-# Каждый тип скана выполняет свой сервис-сканер с одинаковым контрактом
-# (`POST /run/{scan_id}`, прогресс и результаты -- обратно в control-api).
-# Тип без сканера (agent_skills) запустить нельзя.
-SCANNERS: dict[ScanType, tuple[str, str]] = {
-    ScanType.MCP: ("scanner-mcp", os.environ.get("SCANNER_MCP_URL", "http://scanner-mcp:8000")),
-    ScanType.DEEP_TEAM: (
-        "scanner-deepteam",
-        os.environ.get("SCANNER_DEEPTEAM_URL", "http://scanner-deepteam:8000"),
-    ),
-    ScanType.CODE_SCAN: (
-        "scanner-promptfoo",
-        os.environ.get("SCANNER_PROMPTFOO_URL", "http://scanner-promptfoo:8000"),
-    ),
-    ScanType.INDIRECT_INJECTION: (
-        "scanner-indirect",
-        os.environ.get("SCANNER_INDIRECT_URL", "http://scanner-indirect:8000"),
-    ),
-    ScanType.SYSTEM_PROMPT_LEAK: (
-        "scanner-sysleak",
-        os.environ.get("SCANNER_SYSLEAK_URL", "http://scanner-sysleak:8000"),
-    ),
-}
 
 
 def utcnow() -> datetime:
@@ -47,32 +37,41 @@ def _log(session: Session, scan_id: int, message: str, *, level: ScanLogLevel = 
     session.add(ScanLog(scan_id=scan_id, level=level, phase=phase, message=message))
 
 
-def _validate_scan_for_create(scan: Scan) -> Optional[MCPScanConfig]:
-    """Validate the target and type-specific config before persistence."""
-    if scan.type in (ScanType.DEEP_TEAM, ScanType.CODE_SCAN) and scan.agent_config_id is None:
-        raise HTTPException(status_code=422, detail="Для этого типа сканирования требуется конфигурация агента")
-
-    if scan.type != ScanType.MCP:
-        return None
-    if scan.agent_config_id is not None:
-        raise HTTPException(status_code=422, detail="Для MCP-сканирования конфигурация агента не используется")
-
+def _compose_mcp_config(asset_target: dict, scanner_params: dict) -> str:
+    """Собирает Scan.config для MCP-скана: цель -- из актива, параметры
+    проверок -- из запроса (scanner_ids, timeout_seconds, probes, ...).
+    Неизвестные ключи отсеивает схема MCPScanConfig, так что контракт
+    scanner-mcp не меняется, а конфиг нормализуется заранее."""
     try:
-        raw_config = json.loads(scan.config or "{}")
-    except (json.JSONDecodeError, TypeError) as exc:
-        raise HTTPException(status_code=422, detail="config должен содержать JSON-объект") from exc
-    if not isinstance(raw_config, dict):
-        raise HTTPException(status_code=422, detail="config MCP-сканирования должен быть JSON-объектом")
-
-    try:
-        config = MCPScanConfig.model_validate(upgrade_flat(raw_config))
+        config = MCPScanConfig.model_validate(upgrade_flat({"target": asset_target, **scanner_params}))
     except ValidationError as exc:
         raise HTTPException(status_code=422, detail=json.loads(exc.json())) from exc
+    return json.dumps(config.model_dump(mode="json"), ensure_ascii=False)
 
-    # Persist normalized values so scanner-mcp receives one stable contract.
-    scan.config = json.dumps(config.model_dump(mode="json"), ensure_ascii=False)
-    validate_mcp_config(scan.config)
-    return config
+
+@router.get("")
+def list_scans(
+    agent_config_id: Optional[int] = Query(None),
+    asset_kind: Optional[AssetKind] = Query(None),
+    asset_id: Optional[int] = Query(None),
+    scan_type: Optional[ScanType] = Query(None),
+    status: Optional[ScanStatus] = Query(None),
+) -> list[Scan]:
+    """List all scans with optional filters."""
+    with Session(engine) as session:
+        statement = select(Scan)
+        if agent_config_id is not None:
+            statement = statement.where(Scan.agent_config_id == agent_config_id)
+        if asset_kind is not None:
+            statement = statement.where(Scan.asset_kind == asset_kind)
+        if asset_id is not None:
+            statement = statement.where(Scan.asset_id == asset_id)
+        if scan_type is not None:
+            statement = statement.where(Scan.type == scan_type)
+        if status is not None:
+            statement = statement.where(Scan.status == status)
+        statement = statement.order_by(Scan.created_at.desc())
+        return session.exec(statement).all()
 
 
 @router.get("")
@@ -135,10 +134,13 @@ def get_scan_agent_config(scan_id: int) -> dict:
         return {
             "id": agent_config.id,
             "name": agent_config.name,
+            "source": agent_config.source,
             "git_repo_url": agent_config.git_repo_url,
             "git_ref": agent_config.git_ref,
             "dockerfile_path": agent_config.dockerfile_path,
             "api_port": agent_config.api_port,
+            "remote_base_url": agent_config.remote_base_url,
+            "remote_headers": agent_config.remote_headers or {},
             "interaction_mode": agent_config.interaction_mode,
             "api_config": agent_config.api_config,
             "langgraph_config": agent_config.langgraph_config,
@@ -147,13 +149,64 @@ def get_scan_agent_config(scan_id: int) -> dict:
 
 
 @router.post("")
-def create_scan(scan: Scan) -> Scan:
-    """Create a new scan."""
-    mcp_config = _validate_scan_for_create(scan)
+def create_scan(payload: ScanCreate) -> Scan:
+    """Создать скан внутри актива (раздел «Активы»). Применимость сканера к
+    виду актива и валидность конфига определяются реестром сканеров."""
+    registration = find(payload.type)
+    if registration is None:
+        raise HTTPException(status_code=400, detail=f"Для типа сканирования {payload.type} сканер пока не подключён")
+    if payload.asset_kind not in registration.asset_kinds:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Сканер «{registration.name}» не работает с активами типа «{payload.asset_kind.value}»",
+        )
+
     with Session(engine) as session:
-        if mcp_config and isinstance(mcp_config.target, MCPBundleTarget):
-            if not session.get(MCPArtifact, mcp_config.target.artifact_id):
-                raise HTTPException(status_code=422, detail="Указанный MCPB-артефакт не найден")
+        asset_model = {
+            AssetKind.AGENT: AgentConfig,
+            AssetKind.MCP: McpAsset,
+            AssetKind.SKILL: None,  # сущность есть, но сканеров для skills пока нет
+        }[payload.asset_kind]
+        asset = session.get(asset_model, payload.asset_id) if asset_model else None
+        if asset is None:
+            raise HTTPException(status_code=422, detail=f"Актив («{payload.asset_kind}», id={payload.asset_id}) не найден")
+
+        # Remote-агент не собирается платформой и его трафик к LLM не проходит
+        # через наш прокси: анализ кода без репозитория, а инъекциям некуда
+        # подкладываться. Осмысленно только атака по его HTTP API
+        # (динамическое тестирование и PyRIT).
+        _remote_interactive = (ScanType.DEEP_TEAM, ScanType.PYRIT_SCAN)
+        if (
+            payload.asset_kind == AssetKind.AGENT
+            and getattr(asset, "source", None) == AgentSource.REMOTE
+            and payload.type not in _remote_interactive
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail="Для удалённого агента доступны только динамическое тестирование и PyRIT: "
+                "анализу кода нужен репозиторий, а инъекциям — трафик агента через прокси платформы",
+            )
+
+        config_json = "{}"
+        if payload.asset_kind == AssetKind.MCP:
+            config_json = _compose_mcp_config(asset.config, payload.config)
+        elif payload.asset_kind == AssetKind.AGENT:
+            # Параметры сканера из динамической формы (поля его /schema).
+            config_json = json.dumps(payload.config or {}, ensure_ascii=False)
+
+        scan = Scan(
+            name=payload.name.strip(),
+            type=payload.type,
+            asset_kind=payload.asset_kind,
+            asset_id=payload.asset_id,
+            # Сканеры и launcher читают только agent_config_id.
+            agent_config_id=payload.asset_id if payload.asset_kind == AssetKind.AGENT else None,
+            status=ScanStatus.PENDING,
+            session_id=payload.session_id,
+            config=config_json,
+        )
+        if config_json != "{}" and registration.validate_config is not None:
+            registration.validate_config(config_json)
         session.add(scan)
         session.commit()
         session.refresh(scan)
@@ -195,7 +248,7 @@ def delete_scan(scan_id: int) -> dict:
         session.exec(delete(ScanLog).where(ScanLog.scan_id == scan_id))
         session.exec(delete(InjectionTrial).where(InjectionTrial.scan_id == scan_id))
         # Перехваченный трафик скана тоже удаляем: иначе осиротевшие события с
-        # переиспользованными SQLite scan_id/trial_id «подмешиваются» к новому
+        # переиспользованными scan_id/trial_id «подмешиваются» к новому
         # скану (особенно критично для косвенных инъекций, где трафик
         # группируется по trial_id).
         session.exec(delete(TrafficEvent).where(TrafficEvent.scan_id == scan_id))
@@ -207,19 +260,19 @@ def delete_scan(scan_id: int) -> dict:
 @router.post("/{scan_id}/start")
 def start_scan(scan_id: int) -> Scan:
     """Mark a scan RUNNING and hand it off to the scanner service for its type
-    (see SCANNERS). The scanner works in the background; the logs it writes
-    are what the scan detail page polls."""
+    (see scanner_registry). The scanner works in the background; the logs it
+    writes are what the scan detail page polls."""
     with Session(engine) as session:
         scan = session.get(Scan, scan_id)
         if not scan:
             raise HTTPException(status_code=404, detail="Scan not found")
         if scan.status != ScanStatus.PENDING:
             raise HTTPException(status_code=400, detail="Scan can only be started from PENDING status")
-        if scan.type not in SCANNERS:
+        registration = find(scan.type)
+        if registration is None:
             raise HTTPException(status_code=400, detail=f"Для типа сканирования {scan.type.value} сканер пока не подключён")
-        if scan.type == ScanType.MCP:
-            validate_mcp_config(scan.config)
-        scanner_name, scanner_url = SCANNERS[scan.type]
+        if registration.validate_config is not None:
+            registration.validate_config(scan.config)
 
         # Fresh progress log for this run.
         session.exec(delete(ScanLog).where(ScanLog.scan_id == scan_id))
@@ -236,15 +289,15 @@ def start_scan(scan_id: int) -> Scan:
 
     try:
         with httpx.Client(timeout=15.0) as client:
-            client.post(f"{scanner_url}/run/{scan_id}").raise_for_status()
+            client.post(f"{registration.url}/run/{scan_id}").raise_for_status()
     except httpx.HTTPError as exc:
         with Session(engine) as session:
             scan = session.get(Scan, scan_id)
             scan.status = ScanStatus.FAILED
             scan.phase = "Ошибка"
-            scan.error = f"{scanner_name} недоступен: {exc}"
+            scan.error = f"{registration.service} недоступен: {exc}"
             scan.finished_at = utcnow()
-            _log(session, scan_id, f"Не удалось запустить {scanner_name}: {exc}", level=ScanLogLevel.ERROR, phase="Ошибка")
+            _log(session, scan_id, f"Не удалось запустить {registration.service}: {exc}", level=ScanLogLevel.ERROR, phase="Ошибка")
             session.add(scan)
             session.commit()
             session.refresh(scan)

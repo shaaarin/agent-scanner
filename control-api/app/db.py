@@ -6,10 +6,12 @@ from alembic.config import Config
 from sqlalchemy import inspect
 from sqlmodel import Session, create_engine
 
-DB_PATH = os.environ.get("CONTROL_API_DB_PATH", "/data/control-api.db")
-Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
+DATABASE_URL = os.environ.get(
+    "DATABASE_URL",
+    "postgresql+psycopg://agent_scanner:agent_scanner@localhost:5432/agent_scanner",
+)
 
-engine = create_engine(f"sqlite:///{DB_PATH}", connect_args={"check_same_thread": False})
+engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 
 # The revision that represents the schema as it existed before Alembic was
 # introduced. An already-populated database from that era has no
@@ -22,7 +24,7 @@ MIGRATIONS_DIR = Path(__file__).parent / "migrations"
 def _alembic_config() -> Config:
     config = Config()
     config.set_main_option("script_location", str(MIGRATIONS_DIR))
-    config.set_main_option("sqlalchemy.url", f"sqlite:///{DB_PATH}")
+    config.set_main_option("sqlalchemy.url", DATABASE_URL)
     return config
 
 

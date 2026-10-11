@@ -54,7 +54,7 @@ export function CodeScanResults({ results }: { results: CodeScanResultsData }) {
     results.files_in_scope !== undefined && `файлов в анализе: ${results.files_in_scope}`,
     results.min_severity && `порог: ${SEVERITY_LABELS[results.min_severity] ?? results.min_severity}`,
     formatDuration(results.duration_sec) && `длительность ${formatDuration(results.duration_sec)}`,
-    results.engine_version && `promptfoo ${results.engine_version}`,
+    results.engine_version && `${results.engine_label ?? "promptfoo"} ${results.engine_version}`,
   ].filter(Boolean);
 
   return (

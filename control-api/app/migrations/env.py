@@ -6,7 +6,7 @@ from sqlmodel import SQLModel
 
 # Importing the models module registers every table on SQLModel.metadata.
 from app import models  # noqa: F401
-from app.db import DB_PATH
+from app.db import DATABASE_URL
 
 config = context.config
 
@@ -14,7 +14,7 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 if not config.get_main_option("sqlalchemy.url"):
-    config.set_main_option("sqlalchemy.url", f"sqlite:///{DB_PATH}")
+    config.set_main_option("sqlalchemy.url", DATABASE_URL)
 
 target_metadata = SQLModel.metadata
 

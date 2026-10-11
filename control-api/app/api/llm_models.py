@@ -56,7 +56,11 @@ def update_llm_model(llm_model_id: int, payload: LLMModelUpdate, session: Sessio
     llm_model = session.get(LLMModel, llm_model_id)
     if not llm_model:
         raise HTTPException(status_code=404, detail="llm model not found")
-    for key, value in payload.model_dump(exclude_unset=True).items():
+    updates = payload.model_dump(exclude_unset=True)
+    # Пустой api_key -- "не менять" (та же семантика, что и в UI).
+    if "api_key" in updates and not updates["api_key"]:
+        del updates["api_key"]
+    for key, value in updates.items():
         setattr(llm_model, key, value)
     session.add(llm_model)
     session.commit()

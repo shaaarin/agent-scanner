@@ -74,6 +74,14 @@ def _validate_archive(content: bytes) -> dict:
         raise HTTPException(status_code=422, detail=f"В manifest.json отсутствуют поля: {', '.join(missing)}")
     if not isinstance(manifest["server"], dict):
         raise HTTPException(status_code=422, detail="Поле server в manifest.json должно быть объектом")
+    server = manifest["server"]
+    if server.get("type") not in {"python", "node"}:
+        raise HTTPException(status_code=422, detail="server.type в manifest.json должен быть python или node -- другие рантаймы деплой пока не поддерживает")
+    if not isinstance(server.get("entry_point"), str) or not server["entry_point"]:
+        raise HTTPException(status_code=422, detail="В manifest.json отсутствует server.entry_point (путь к точке входа сервера)")
+    mcp_config = server.get("mcp_config")
+    if not isinstance(mcp_config, dict) or not isinstance(mcp_config.get("command"), str) or not mcp_config.get("command"):
+        raise HTTPException(status_code=422, detail="В manifest.json нужен server.mcp_config.command -- команда запуска сервера по stdio")
     return manifest
 
 

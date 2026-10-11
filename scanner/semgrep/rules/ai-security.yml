@@ -1,0 +1,130 @@
+# Базовый набор правил для анализа AI/LLM-кода агентов (scan type
+# `ai_code_scan`, сервис scanner-semgrep). Всегда выполняется вместе со
+# сканом; официальные наборы Semgrep Registry и пользовательские правила
+# подключаются к нему параметрами скана.
+#
+# Ответ модели и пользовательский ввод -- недоверенные данные; правила
+# ловят их попадание в опасные приёмники и динамическую сборку промптов.
+# Это AST-правила одного файла: без межфайлового taint, находка -- повод
+# проверить код, а не доказательство уязвимости.
+rules:
+  # --- Python ---
+  - id: ai.python.system-prompt-dynamic
+    languages: [python]
+    severity: WARNING
+    message: "Системный промпт собирается через f-string: подмешанные в него данные -- вектор промпт-инъекции. Собирайте системный промпт из доверенных констант, пользовательский ввод передавайте сообщением role=user."
+    metadata: {category: security, cwe: CWE-74, confidence: MEDIUM}
+    patterns:
+      - pattern: '{"role": "system", "content": $MSG}'
+      - metavariable-pattern:
+          metavariable: $MSG
+          patterns:
+            - pattern: f"...{$X}..."
+  - id: ai.python.completion-to-dangerous-sink
+    mode: taint
+    languages: [python]
+    severity: ERROR
+    message: "Ответ LLM достигает опасного приёмника (eval/exec, shell, pickle, SQL, шаблон). Ответ модели -- недоверенный ввод: валидируйте его и используйте фиксированный набор операций."
+    metadata: {category: security, cwe: CWE-95, confidence: MEDIUM}
+    pattern-sources:
+      - pattern-either:
+          - pattern: $RESP.choices[...].message.content
+          - pattern: $RESP.choices[...].delta.content
+          - pattern: $RESP["choices"][...]["message"]["content"]
+          - patterns:
+              - pattern: $CHAIN.invoke(...)
+              - metavariable-regex:
+                  metavariable: $CHAIN
+                  regex: (?i)(chain|agent|graph|executor)
+    pattern-sinks:
+      - pattern-either:
+          - pattern: eval(...)
+          - pattern: exec(...)
+          - pattern: os.system(...)
+          - pattern: os.popen(...)
+          - pattern: subprocess.$F(...)
+          - pattern: pickle.loads(...)
+          - pattern: $CUR.execute(...)
+          - pattern: render_template_string(...)
+  - id: ai.python.hardcoded-llm-key
+    languages: [python]
+    severity: ERROR
+    message: "Ключ LLM-провайдера зашит в исходнике. Читайте его из окружения или секрет-хранилища и не коммитьте."
+    metadata: {category: security, cwe: CWE-798, confidence: HIGH}
+    patterns:
+      - pattern-either:
+          - patterns:
+              - pattern: $CLIENT(api_key="...", ...)
+              - metavariable-regex:
+                  metavariable: $CLIENT
+                  regex: ^(?:openai|anthropic|groq|together)\.(?:OpenAI|AsyncOpenAI|AzureOpenAI|Anthropic|AsyncAnthropic|Groq|Together)$|^(?:OpenAI|AsyncOpenAI|AzureOpenAI|Anthropic|AsyncAnthropic|Groq|Together)$
+          - pattern: $KEY = "sk-..."
+  - id: ai.python.secret-to-llm-message
+    languages: [python]
+    severity: WARNING
+    message: "В сообщение для LLM попадает значение из окружения (возможно, секрет) или ключ клиента. Провайдер получит его в открытом виде: передавайте только данные задачи."
+    metadata: {category: security, cwe: CWE-200, confidence: LOW}
+    patterns:
+      - pattern: '{"role": $ROLE, "content": $MSG}'
+      - metavariable-pattern:
+          metavariable: $MSG
+          patterns:
+            - pattern-either:
+                - pattern: f"...{os.environ[...]}..."
+                - pattern: f"...{os.getenv(...)}..."
+                - pattern: f"...{$X.api_key}..."
+
+  # --- JavaScript / TypeScript ---
+  - id: ai.javascript.system-prompt-dynamic
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: "Системный промпт собирается через template literal: подмешанные данные -- вектор промпт-инъекции. Системный промпт держите константой, пользовательский ввод передавайте сообщением role=user."
+    metadata: {category: security, cwe: CWE-74, confidence: MEDIUM}
+    patterns:
+      - pattern: '{ role: "system", content: $MSG }'
+      - metavariable-pattern:
+          metavariable: $MSG
+          patterns:
+            - pattern: "`...${$X}...`"
+  - id: ai.javascript.completion-to-dangerous-sink
+    mode: taint
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: "Ответ LLM достигает опасного приёмника (eval, new Function, shell). Ответ модели -- недоверенный ввод: валидируйте его и используйте фиксированный набор операций."
+    metadata: {category: security, cwe: CWE-95, confidence: MEDIUM}
+    pattern-sources:
+      - pattern-either:
+          - pattern: $RESP.choices[...].message.content
+          - pattern: $RESP.choices[...].delta.content
+    pattern-sinks:
+      - pattern-either:
+          - pattern: eval(...)
+          - pattern: new Function(...)
+          - pattern: $CP.exec(...)
+          - pattern: $CP.execSync(...)
+          - pattern: exec(...)
+          - pattern: execSync(...)
+  - id: ai.javascript.hardcoded-llm-key
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: "Ключ LLM-провайдера зашит в исходнике. Читайте его из переменных окружения или секрет-хранилища и не коммитьте."
+    metadata: {category: security, cwe: CWE-798, confidence: HIGH}
+    patterns:
+      - pattern-either:
+          - patterns:
+              - pattern: 'new $CLIENT({ apiKey: "...", ... })'
+              - metavariable-regex:
+                  metavariable: $CLIENT
+                  regex: ^(OpenAI|Anthropic)$
+          - pattern: 'apiKey: "sk-..."'
+  - id: ai.javascript.llm-html-injection
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: "Ответ LLM рендерится как HTML без экранирования (dangerouslySetInnerHTML): риск XSS и инъекции контента. Рендерьте текстом или санитайзите (например, DOMPurify)."
+    metadata: {category: security, cwe: CWE-79, confidence: MEDIUM}
+    patterns:
+      - pattern: '<$ELT dangerouslySetInnerHTML={{ __html: $HTML }} />'
+      - metavariable-pattern:
+          metavariable: $HTML
+          patterns:
+            - pattern: $X.choices[...].message.content
