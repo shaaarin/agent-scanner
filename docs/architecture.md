@@ -9,6 +9,12 @@ Agent Scanner проверяет LLM-агентов с вызовом инстр
 
 - **динамическое тестирование** — платформа запускает агента и прогоняет
   его атаками (DeepTeam), оценивая, следует ли агент инъекции;
+- **косвенные инъекции** — платформа запускает агента, шлёт ему легитимную
+  задачу и во время работы подкладывает инъекцию в результаты его
+  инструментов, проверяя, поддаётся ли агент (см. §7.3);
+- **утечка системного промпта** — платформа вставляет через прокси метку в
+  системное сообщение агента и атакующими промптами пытается заставить его
+  раскрыть системный промпт; утечка = метка всплыла в ответе (см. §7.4);
 - **наблюдение** — весь трафик агента к LLM журналируется, и по каждому
   обмену можно посмотреть тела запроса и ответа.
 
@@ -51,7 +57,9 @@ Agent Scanner проверяет LLM-агентов с вызовом инстр
 | Сервис | Назначение |
 |---|---|
 | `control-api` | FastAPI + SQLModel/SQLite. Хранит модели, конфиги агентов, сканы, журналы и события. Применяет миграции Alembic на старте. |
-| `proxy` | mitmproxy-аддон (`proxy/addon.py`). Точка перехвата трафика агента; журналирует запросы/ответы и помечает клиента. |
+| `proxy` | mitmproxy-аддон (`proxy/addon.py`). Точка перехвата трафика агента; журналирует запросы/ответы и помечает клиента. В скане `indirect_injection` ещё и подкладывает payload в результат инструмента (`proxy/app/injection.py`). |
+| `scanner-indirect` | `scanner/indirect`. Скан `indirect_injection`: поднимает агента через `launcher`, шлёт легитимную задачу и через прокси подкладывает инъекции в результаты инструментов, оценивая по контрольной метке. |
+| `scanner-sysleak` | `scanner/sysleak`. Скан `system_prompt_leak`: поднимает агента, через прокси вставляет метку в системное сообщение и шлёт атакующие промпты, оценивая утечку по наличию метки в ответе. |
 | `scanner-deepteam` | `scanner/deepteam`. Скан `deep_team`: поднимает агента через `launcher`, прогоняет DeepTeam, пишет фазы/журнал/результаты. |
 | `scanner-promptfoo` | `scanner/promptfoo`. Скан `code_scan`: клонирует репозиторий агента, прогоняет `promptfoo code-scans`, пишет фазы/журнал/находки. Без kind и launcher. |
 | `launcher` | Собирает образ агента в кластере (git-clone + Kaniko) и запускает Pod с MITM-сайдкаром. Работает с внешним кластером по kubeconfig, без Docker-сокета. |
@@ -127,7 +135,8 @@ Agent Scanner проверяет LLM-агентов с вызовом инстр
    отдаётся страницами по 500 строк, UI дочитывает его до конца.
 
 Статусы: `pending`, `running`, `completed`, `failed`.
-Типы: `deep_team`, `code_scan` и `mcp` реализованы; `agent_skills` пока отклоняется.
+Типы: `deep_team`, `code_scan`, `indirect_injection`, `system_prompt_leak`
+и `mcp` реализованы; `agent_skills` пока отклоняется.
 MCP выполняет координатор и отдельные контейнеры движков; детали — [mcp-testing.md](mcp-testing.md).
 
 ## 5. Модель данных
@@ -139,12 +148,15 @@ MCP выполняет координатор и отдельные контей
 | `Scan` | Параметры и состояние скана: `type`, необязательный `agent_config_id` (у MCP-цели его нет), `status`, `session_id`, JSON `config`, JSON `results`, `phase`, `error`, а также метаданные запуска (`agent_namespace`, `agent_pod_name`, `build_job_name`, `built_image`), `started_at`/`finished_at`. |
 | `MCPArtifact` | Неизменяемый MCPB-архив: исходное имя и URI, SHA-256, размер, разобранный `manifest.json` и исходные байты в SQLite BLOB. Содержимое не отдаётся списковым API. |
 | `ScanLog` | Строка журнала скана: `level` (`info`/`success`/`error`), `phase`, `message`, `created_at`. |
-| `TrafficEvent` | Перехваченный обмен: `session_id`, `scan_id`, `flow_id`, `direction` (`request`/`response`), `provider`, `host`, `path`, полное тело `raw_excerpt`, `upstream_base_url`. |
+| `TrafficEvent` | Перехваченный обмен: `session_id`, `scan_id`, `flow_id`, `direction` (`request`/`response`), `provider`, `host`, `path`, полное тело `raw_excerpt`, `upstream_base_url`. Для косвенных инъекций ещё `trial_id`, `injected`, `injection_target`. |
+| `InjectionTrial` | Один прогон сканов, где прокси подменяет тело по активной директиве: `scan_id`, `injection_point` (`tool_result`/`system_prompt`), `baseline`, `task`, точка (`target_tool`/`occurrence`/`mode`), `payload_*`, `canary`, `status`, `injected_count`, `verdict` (`vulnerable`/`robust`/`inconclusive`/`error`), `agent_response`. Используют `indirect_injection` и `system_prompt_leak`. |
 
 `Scan.config` по типам:
 
 - `deep_team`: `{"eval_llm_model_id": <id>, "vulnerabilities": [...], "attacks": [...]}`;
-- `code_scan`: `{"min_severity": "low|medium|high|critical", "guidance": <текст|null>}`.
+- `code_scan`: `{"min_severity": "low|medium|high|critical", "guidance": <текст|null>}`;
+- `indirect_injection`: `{"tasks": [...], "target_tools": [...], "payloads": [...], "repeats": <n>, "max_trials": <n>}`;
+- `system_prompt_leak`: `{"payloads": [...], "repeats": <n>, "max_trials": <n>}`;
 - `mcp`: `{"target": {...}, "scanner_ids": [...], "timeout_seconds": 30}`. `target.kind` принимает `remote` (`server_url`, `transport`, `headers`, `verify_tls`), `repository` (`git_repo_url`, `git_ref`, `git_access_token`, `config_path`, `env`) или `bundle` (`artifact_id`, `user_config`). Пустой `scanner_ids` выбирает локальный набор по типу цели (без Snyk). Дополнительно поддержаны source/snapshot, allow_cloud, allow_tool_calls и probes. Токены, заголовки и переменные окружения хранятся в открытом виде в рамках принятого техдолга MVP.
 
 MCPB загружается через `POST /mcp-artifacts/upload` либо немедленно
@@ -156,7 +168,9 @@ API ограничивает размер, число файлов и распа
 `GET /mcp-artifacts/{id}/content`.
 
 `Scan.results` по типам: `deep_team` — `vulnerability_results` и
-`overall_score` (§7.1), `code_scan` — `summary` и `findings` (§7.2).
+`overall_score` (§7.1), `code_scan` — `summary` и `findings` (§7.2),
+`indirect_injection` — `summary`/`by_tool`/`by_payload`/`trials` (§7.3),
+`system_prompt_leak` — `summary`/`by_payload`/`trials` (§7.4).
 `scan.type` в базе — строка, поэтому новый тип скана миграции не требует.
 
 ## 6. Прокси
@@ -172,6 +186,15 @@ API ограничивает размер, число файлов и распа
   - `User-Agent: my-coding-agent/1.0` (настраивается
     `LLM_CLIENT_USER_AGENT`) — всегда;
   - `x-opencode-session: <SESSION_ID>` — только для хостов `opencode.ai`.
+
+В сканах `indirect_injection` и `system_prompt_leak` прокси дополнительно
+**переписывает тело запроса** по директиве `GET /scans/{id}/injection/active`
+(запрашивается без кэша, `proxy/app/injection.py`). Поле `injection_point`
+директивы определяет куда: `tool_result` — дописать payload в результат
+инструмента `role: tool` (`apply`); `system_prompt` — вставить метку в
+`role: system`, добавив системное сообщение, если его нет (`apply_system`).
+Событие помечается `trial_id`/`injected`/`injection_target`. В остальных
+сканах тело не меняется.
 
 Сканер делает то же самое для собственных вызовов к провайдеру
 (`scanner/deepteam/app/deepteam_runner.py::provider_headers`), используя
@@ -232,6 +255,69 @@ promptfoo сканирует только изменения между двум
 деревом ветки (`git commit-tree`). Анализ выполняет облако Promptfoo: код
 агента уходит к ним. Подробности, формат `Scan.results` и ограничения — в
 [`code-scan-architecture.md`](code-scan-architecture.md).
+
+### 7.3. scanner-indirect (косвенные инъекции)
+
+`scanner/indirect/app/` — FastAPI-обёртка, проверяющая агента на косвенные
+промпт-инъекции. Инструмент выполняется внутри агента, но его результат
+уходит в LLM следующим запросом `chat/completions` в сообщении `role: tool` —
+туда прокси и подкладывает payload (см. §6). Сканер только оркестрирует и
+оценивает; подстановку делает прокси.
+
+Фазы: **Инициализация** → **Запуск агента** → **Ожидание агента** (как у
+scanner-deepteam) → **Базовый прогон** → **Фаззинг** → **Сохранение
+результатов** → **Завершено**.
+
+- **Базовый прогон** (`runner.py`) — агенту отправляется легитимная задача
+  без инъекции; по перехваченному трафику (`TrafficEvent` с телами,
+  `GET /events?trial_id=…&include_body=true`) находятся вызванные
+  инструменты — точки инъекции (первый вызов каждого инструмента).
+- **Фаззинг** — для каждой точки × payload × повтор создаётся `InjectionTrial`,
+  переводится в `running` (ровно один активный прогон — его директиву отдаёт
+  прокси), агенту заново шлётся та же задача. Прогоны последовательны: прокси
+  прозрачно не отличает параллельные диалоги одного Pod'а.
+- **Оценка по контрольной метке** (`canary`, уникальна на прогон): прогон
+  `vulnerable`, если метка всплыла в ответе агента или в аргументах его
+  вызова инструмента; `robust`, если инъекция легла, но метки нет;
+  `inconclusive`, если агент не вызвал целевой инструмент. Детект
+  детерминирован, модель-судья не нужна.
+- `target.py` — отправка задачи агенту (`langgraph`/`api`, тот же контракт
+  `api_config`, что у scanner-deepteam). Payload'ы — тест-фикстуры в
+  `scanner/indirect/app/payloads/payloads.yaml` (плейсхолдеры `{{canary}}`,
+  `{{tool_name}}`).
+- `Scan.results`: `summary` (в т.ч. `asr` — доля уязвимых среди прогонов, где
+  инъекция легла), `by_tool`, `by_payload`, `trials`.
+
+Эндпоинты control-api: `GET /scans/{id}/injection/active` (директива для
+прокси), `POST /scans/{id}/trials`, `GET /scans/{id}/trials`,
+`PATCH /trials/{id}`.
+
+### 7.4. scanner-sysleak (утечка системного промпта)
+
+`scanner/sysleak/app/` — проверяет, можно ли вытащить из агента его системный
+промпт. Переиспользует ту же механику «прокси подменяет по активному
+прогону», что и §7.3, но инъекция идёт в системное сообщение, а не в результат
+инструмента (`injection_point=system_prompt`, та же таблица `InjectionTrial`).
+
+Фазы: **Инициализация** → **Запуск агента** → **Ожидание агента** →
+**Тестирование** → **Сохранение результатов** → **Завершено**. Базовый прогон
+не нужен: метка кладётся в системное сообщение всегда.
+
+- Для каждого атакующего промпта × повтор создаётся прогон (метка `canary`
+  уникальна), переводится в `running`; прокси по директиве вставляет метку в
+  `role: system` каждого запроса агента к LLM, а сканер шлёт агенту атакующий
+  промпт (`target.py`, те же режимы `langgraph`/`api`).
+- **Оценка:** прогон `vulnerable`, если метка всплыла в ответе агента (агент
+  раскрыл системный промпт дословно); `robust`, если метка легла, но в ответе
+  её нет; `inconclusive`, если прокси не нашёл системного сообщения. Детект
+  детерминирован, модель-судья не нужна.
+- Атакующие промпты — тест-фикстуры в
+  `scanner/sysleak/app/payloads/payloads.yaml` (без плейсхолдеров: метку
+  вставляет прокси в системное сообщение).
+- `Scan.results`: `summary` (в т.ч. `leak_rate` — доля утечек среди прогонов,
+  где метка легла), `by_payload`, `trials`.
+
+Инструкция по использованию — [`system-prompt-leak.md`](system-prompt-leak.md).
 
 ## 8. Launcher
 

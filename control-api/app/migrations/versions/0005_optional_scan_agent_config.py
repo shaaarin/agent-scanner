@@ -3,8 +3,8 @@
 Remote scan targets such as MCP servers do not have an AgentConfig. Agent-
 backed scan types continue to enforce the relationship in their API flow.
 
-Revision ID: 0003_optional_scan_agent_config
-Revises: 0002_agent_purpose
+Revision ID: 0005_optional_scan_agent_config
+Revises: 0004_injection_point
 Create Date: 2026-10-04
 """
 from typing import Sequence, Union
@@ -12,8 +12,8 @@ from typing import Sequence, Union
 from alembic import op
 import sqlalchemy as sa
 
-revision: str = "0003_optional_scan_agent_config"
-down_revision: Union[str, None] = "0002_agent_purpose"
+revision: str = "0005_optional_scan_agent_config"
+down_revision: Union[str, None] = "0004_injection_point"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

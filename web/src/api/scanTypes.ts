@@ -3,6 +3,8 @@ import type { CodeScanSeverity, ScanType } from "./types";
 export const SCAN_TYPE_LABELS: Record<ScanType, string> = {
   deep_team: "Динамическое тестирование",
   code_scan: "Анализ кода",
+  indirect_injection: "Косвенные инъекции",
+  system_prompt_leak: "Утечка системного промпта",
   mcp: "MCP",
   agent_skills: "Agent Skills",
 };
@@ -26,6 +28,23 @@ export const SCAN_PHASES: Partial<Record<ScanType, string[]>> = {
     "Инициализация",
     "Клонирование",
     "Анализ кода",
+    "Сохранение результатов",
+    "Завершено",
+  ],
+  indirect_injection: [
+    "Инициализация",
+    "Запуск агента",
+    "Ожидание агента",
+    "Базовый прогон",
+    "Фаззинг",
+    "Сохранение результатов",
+    "Завершено",
+  ],
+  system_prompt_leak: [
+    "Инициализация",
+    "Запуск агента",
+    "Ожидание агента",
+    "Тестирование",
     "Сохранение результатов",
     "Завершено",
   ],

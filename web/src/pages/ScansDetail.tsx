@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { api } from "../api/client";
-import type { Scan, AgentConfig, ScanResults, ScanLog, CodeScanResults as CodeScanResultsData } from "../api/types";
+import type { Scan, AgentConfig, ScanResults, ScanLog, CodeScanResults as CodeScanResultsData, IndirectInjectionResults as IndirectInjectionResultsData, SystemPromptLeakResults as SystemPromptLeakResultsData } from "../api/types";
 import { SCAN_PHASES, scanTypeLabel } from "../api/scanTypes";
 import { PageHeader } from "../components/PageHeader";
 import { CodeScanResults } from "../components/CodeScanResults";
+import { IndirectInjectionResults } from "../components/IndirectInjectionResults";
+import { SystemPromptLeakResults } from "../components/SystemPromptLeakResults";
 
 import { MCPResults, type MCPResultData } from "../components/MCPResults";
 
@@ -305,9 +307,17 @@ export function ScansDetail() {
         <CodeScanResults results={results as unknown as CodeScanResultsData} />
       )}
 
+      {scan.status === "completed" && results && scan.type === "indirect_injection" && (
+        <IndirectInjectionResults results={results as unknown as IndirectInjectionResultsData} />
+      )}
+
+      {scan.status === "completed" && results && scan.type === "system_prompt_leak" && (
+        <SystemPromptLeakResults results={results as unknown as SystemPromptLeakResultsData} />
+      )}
+
       {results && scan.type === "mcp" && <MCPResults results={results as unknown as MCPResultData} />}
 
-      {results && scan.type !== "code_scan" && scan.type !== "mcp" &&
+      {results && scan.type !== "code_scan" && scan.type !== "indirect_injection" && scan.type !== "system_prompt_leak" && scan.type !== "mcp" &&
         (scan.status === "completed" || (scan.status === "failed" && (results.vulnerability_results?.length ?? 0) > 0)) && (
         <div className="card" style={{ padding: "2rem", marginTop: scan.status === "failed" ? "2rem" : undefined }}>
           <h3 style={{ marginBottom: "1.5rem" }}>{scan.status === "failed" ? "Кейсы" : "Результаты"}</h3>

@@ -18,7 +18,7 @@ import uuid
 
 from mitmproxy import http
 
-from app import control_client, openai_provider
+from app import control_client, injection, openai_provider
 
 SESSION_ID = os.environ.get("SESSION_ID", "")
 CHAT_COMPLETIONS_SUFFIX = "/chat/completions"
@@ -97,6 +97,25 @@ class InjectionAddon:
         flow_id = str(uuid.uuid4())
         flow.metadata["flow_id"] = flow_id
 
+        # Косвенные инъекции: в скане этого типа спрашиваем активный прогон и,
+        # если он несёт payload, дописываем его в результат нужного инструмента
+        # ДО отправки запроса к LLM. В остальных сканах прокси тело не трогает.
+        trial_id = None
+        injected = False
+        injection_target = None
+        if scan and scan.get("type") in ("indirect_injection", "system_prompt_leak"):
+            directive = await control_client.get_active_injection(scan["scan_id"])
+            if directive:
+                trial_id = directive.get("trial_id")
+                if directive.get("inject"):
+                    if directive.get("injection_point") == "system_prompt":
+                        body, injected, injection_target = injection.apply_system(body, directive)
+                    else:
+                        body, injected, injection_target = injection.apply(body, directive)
+                    if injected:
+                        flow.request.content = json.dumps(body).encode()
+        flow.metadata["trial_id"] = trial_id
+
         await self._log_event(
             scan=scan,
             flow_id=flow_id,
@@ -104,6 +123,9 @@ class InjectionAddon:
             host=flow.request.pretty_host,
             raw_excerpt=json.dumps(body),
             upstream_base_url=_upstream_base_url(flow),
+            trial_id=trial_id,
+            injected=injected,
+            injection_target=injection_target,
         )
 
     async def responseheaders(self, flow: http.HTTPFlow) -> None:
@@ -137,22 +159,27 @@ class InjectionAddon:
             direction="response",
             host=flow.request.pretty_host,
             raw_excerpt=json.dumps(response_body),
+            trial_id=flow.metadata.get("trial_id"),
         )
 
-    async def _log_event(self, *, scan, flow_id, direction, host, raw_excerpt, upstream_base_url=None) -> None:
+    async def _log_event(
+        self, *, scan, flow_id, direction, host, raw_excerpt,
+        upstream_base_url=None, trial_id=None, injected=False, injection_target=None,
+    ) -> None:
         # Заголовок Authorization агента (его настоящий ключ LLM) сюда не
         # передаётся: TrafficEvent его не хранит, а по сети он уходил.
         await control_client.post_event(
             {
                 "session_id": SESSION_ID,
                 "scan_id": scan["scan_id"] if scan else None,
+                "trial_id": trial_id,
                 "flow_id": flow_id,
                 "direction": direction,
                 "provider": "openai",
                 "host": host,
                 "path": CHAT_COMPLETIONS_SUFFIX,
-                "injected": False,
-                "injection_target": None,
+                "injected": injected,
+                "injection_target": injection_target,
                 "success_detected": False,
                 "detail": "",
                 "raw_excerpt": raw_excerpt,

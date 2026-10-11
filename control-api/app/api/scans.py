@@ -9,7 +9,7 @@ from pydantic import ValidationError
 from sqlmodel import Session, delete, select
 
 from app.db import engine, get_session
-from app.models import AgentConfig, MCPArtifact, Scan, ScanLog, ScanLogLevel, ScanStatus, ScanType
+from app.models import AgentConfig, InjectionTrial, MCPArtifact, Scan, ScanLog, ScanLogLevel, ScanStatus, ScanType, TrafficEvent
 from app.schemas import MCPBundleTarget, MCPScanConfig, ScanLogCreate, ScanUpdate
 from app.mcp_config import upgrade_flat, validate_mcp_config
 
@@ -17,7 +17,7 @@ router = APIRouter(prefix="/scans", tags=["scans"])
 
 # Каждый тип скана выполняет свой сервис-сканер с одинаковым контрактом
 # (`POST /run/{scan_id}`, прогресс и результаты -- обратно в control-api).
-# Тип без сканера (mcp, agent_skills) запустить нельзя.
+# Тип без сканера (agent_skills) запустить нельзя.
 SCANNERS: dict[ScanType, tuple[str, str]] = {
     ScanType.MCP: ("scanner-mcp", os.environ.get("SCANNER_MCP_URL", "http://scanner-mcp:8000")),
     ScanType.DEEP_TEAM: (
@@ -27,6 +27,14 @@ SCANNERS: dict[ScanType, tuple[str, str]] = {
     ScanType.CODE_SCAN: (
         "scanner-promptfoo",
         os.environ.get("SCANNER_PROMPTFOO_URL", "http://scanner-promptfoo:8000"),
+    ),
+    ScanType.INDIRECT_INJECTION: (
+        "scanner-indirect",
+        os.environ.get("SCANNER_INDIRECT_URL", "http://scanner-indirect:8000"),
+    ),
+    ScanType.SYSTEM_PROMPT_LEAK: (
+        "scanner-sysleak",
+        os.environ.get("SCANNER_SYSLEAK_URL", "http://scanner-sysleak:8000"),
     ),
 }
 
@@ -185,6 +193,12 @@ def delete_scan(scan_id: int) -> dict:
         if not scan:
             raise HTTPException(status_code=404, detail="Scan not found")
         session.exec(delete(ScanLog).where(ScanLog.scan_id == scan_id))
+        session.exec(delete(InjectionTrial).where(InjectionTrial.scan_id == scan_id))
+        # Перехваченный трафик скана тоже удаляем: иначе осиротевшие события с
+        # переиспользованными SQLite scan_id/trial_id «подмешиваются» к новому
+        # скану (особенно критично для косвенных инъекций, где трафик
+        # группируется по trial_id).
+        session.exec(delete(TrafficEvent).where(TrafficEvent.scan_id == scan_id))
         session.delete(scan)
         session.commit()
         return {"message": "Scan deleted"}

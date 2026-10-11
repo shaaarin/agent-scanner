@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api import (
     agent_configs,
     events,
+    injection,
     library,
     llm_models,
     mcp_artifacts,
@@ -26,6 +27,7 @@ app.include_router(llm_models.router)
 app.include_router(agent_configs.router)
 app.include_router(mcp_artifacts.router)
 app.include_router(scans.router)
+app.include_router(injection.router)
 app.include_router(library.router)
 
 
