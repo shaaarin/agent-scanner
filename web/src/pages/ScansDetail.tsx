@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import { Link, useParams, useNavigate } from "react-router-dom";
 import { api } from "../api/client";
-import type { Scan, AgentConfig, ScanResults, ScanLog, CodeScanResults as CodeScanResultsData, IndirectInjectionResults as IndirectInjectionResultsData, SystemPromptLeakResults as SystemPromptLeakResultsData } from "../api/types";
-import { SCAN_PHASES, scanTypeLabel } from "../api/scanTypes";
+import type { Scan, AgentConfig, ScanResults, ScanLog, ScannerRegistration, CodeScanResults as CodeScanResultsData, IndirectInjectionResults as IndirectInjectionResultsData, SystemPromptLeakResults as SystemPromptLeakResultsData } from "../api/types";
+import { scanTypeLabel } from "../api/scanTypes";
 import { PageHeader } from "../components/PageHeader";
 import { CodeScanResults } from "../components/CodeScanResults";
 import { IndirectInjectionResults } from "../components/IndirectInjectionResults";
@@ -33,6 +33,7 @@ export function ScansDetail() {
   const [agentConfig, setAgentConfig] = useState<AgentConfig | null>(null);
   const [results, setResults] = useState<ScanResults | null>(null);
   const [logs, setLogs] = useState<ScanLog[]>([]);
+  const [scanner, setScanner] = useState<ScannerRegistration | null>(null);
   const [starting, setStarting] = useState(false);
   const [startError, setStartError] = useState<string | null>(null);
   const logEndRef = useRef<HTMLDivElement | null>(null);
@@ -116,8 +117,36 @@ export function ScansDetail() {
     return <span className={`badge ${colors[status] || "badge-secondary"}`}>{labels[status] || status}</span>;
   };
 
-  const phases = scan ? SCAN_PHASES[scan.type] ?? [] : [];
+  // Лейбл типа и фазы -- из реестра сканеров (GET /scanners).
+  const phases = scanner?.phases ?? [];
+  const typeLabel = scanner?.name ?? (scan ? scanTypeLabel(scan.type) : "");
   const currentPhaseIndex = scan?.phase ? phases.indexOf(scan.phase) : -1;
+
+  useEffect(() => {
+    if (!scan) return;
+    api
+      .get<ScannerRegistration[]>("/scanners")
+      .then((all) => setScanner(all.find((reg) => reg.type === scan.type) ?? null))
+      .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scan?.type]);
+
+  // Название актива для ссылки (у агентов оно приходит с agent-config,
+  // для MCP и skills -- дочитываем из их эндпоинтов).
+  const [assetName, setAssetName] = useState<string | null>(null);
+  useEffect(() => {
+    if (!scan?.asset_kind || !scan.asset_id) return;
+    const path =
+      scan.asset_kind === "agent"
+        ? `/agent-configs/${scan.asset_id}`
+        : scan.asset_kind === "mcp"
+          ? `/mcp-assets/${scan.asset_id}`
+          : `/skill-assets/${scan.asset_id}`;
+    api
+      .get<{ name: string }>(path)
+      .then((asset) => setAssetName(asset.name))
+      .catch(() => {});
+  }, [scan?.asset_kind, scan?.asset_id]);
 
   if (!scan) {
     return <div>Загрузка сканирования…</div>;
@@ -128,7 +157,7 @@ export function ScansDetail() {
       <div>
       <PageHeader
         title={scan.name}
-        description={`${scanTypeLabel(scan.type)} · сканирование`}
+        description={`${typeLabel} · сканирование`}
       />
       <div className="card" style={{ padding: "3.2rem", textAlign: "center" }}>
         <h2 style={{ marginBottom: "1rem" }}>В разработке</h2>
@@ -147,7 +176,7 @@ export function ScansDetail() {
     <div>
       <PageHeader
         title={scan.name}
-        description={`${scanTypeLabel(scan.type)} · сканирование`}
+        description={`${typeLabel} · сканирование`}
         actions={
           <div style={{ display: "flex", gap: "0.5rem" }}>
             {scan.status === "pending" && (
@@ -177,11 +206,17 @@ export function ScansDetail() {
           </div>
           <div>
             <div style={{ color: "var(--text-600)", fontSize: "0.9rem" }}>Тип</div>
-            <div style={{ marginTop: "0.25rem" }}>{scanTypeLabel(scan.type)}</div>
+            <div style={{ marginTop: "0.25rem" }}>{typeLabel}</div>
           </div>
           <div>
-            <div style={{ color: "var(--text-600)", fontSize: "0.9rem" }}>Агент</div>
-            <div style={{ marginTop: "0.25rem" }}>{agentConfig?.name || "-"}</div>
+            <div style={{ color: "var(--text-600)", fontSize: "0.9rem" }}>Актив</div>
+            <div style={{ marginTop: "0.25rem" }}>
+              {scan.asset_kind && scan.asset_id ? (
+                <Link to={`/assets/${scan.asset_kind}/${scan.asset_id}`}>{assetName || agentConfig?.name || "Открыть актив"}</Link>
+              ) : (
+                agentConfig?.name || "-"
+              )}
+            </div>
           </div>
           <div>
             <div style={{ color: "var(--text-600)", fontSize: "0.9rem" }}>Создано</div>
@@ -288,6 +323,8 @@ export function ScansDetail() {
           <p style={{ color: "var(--text-500)", fontSize: 13, margin: "0.6rem 0 0" }}>
             {scan.type === "mcp" ? "Платформа выполнит выбранный MCP-сканер с параметрами этого теста." : scan.type === "code_scan"
               ? "Платформа скачает код агента и проверит его через promptfoo. Агент при этом не запускается."
+              : scan.type === "ai_code_scan"
+              ? "Платформа скачает код агента и проверит его локальным Semgrep по AI-правилам. Агент при этом не запускается, код никуда не отправляется."
               : "Платформа соберёт агента, поднимет его и проверит ответы на выбранные атаки."}
           </p>
           <button className="btn btn-primary" onClick={handleStart} disabled={starting} style={{ marginTop: "1.6rem" }}>
@@ -303,7 +340,7 @@ export function ScansDetail() {
         </div>
       )}
 
-      {scan.status === "completed" && results && scan.type === "code_scan" && (
+      {scan.status === "completed" && results && (scan.type === "code_scan" || scan.type === "ai_code_scan") && (
         <CodeScanResults results={results as unknown as CodeScanResultsData} />
       )}
 
@@ -317,7 +354,7 @@ export function ScansDetail() {
 
       {results && scan.type === "mcp" && <MCPResults results={results as unknown as MCPResultData} />}
 
-      {results && scan.type !== "code_scan" && scan.type !== "indirect_injection" && scan.type !== "system_prompt_leak" && scan.type !== "mcp" &&
+      {results && scan.type !== "code_scan" && scan.type !== "ai_code_scan" && scan.type !== "indirect_injection" && scan.type !== "system_prompt_leak" && scan.type !== "mcp" &&
         (scan.status === "completed" || (scan.status === "failed" && (results.vulnerability_results?.length ?? 0) > 0)) && (
         <div className="card" style={{ padding: "2rem", marginTop: scan.status === "failed" ? "2rem" : undefined }}>
           <h3 style={{ marginBottom: "1.5rem" }}>{scan.status === "failed" ? "Кейсы" : "Результаты"}</h3>

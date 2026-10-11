@@ -25,6 +25,37 @@ def health():
     return {"status": "ok"}
 
 
+_SEVERITY_LABELS = {"critical": "Критическая", "high": "Высокая", "medium": "Средняя", "low": "Низкая"}
+
+
+@app.get("/schema")
+def schema():
+    """Описание полей конфига для динамической формы UI."""
+    from app.promptfoo import SEVERITIES
+
+    return {
+        "type": "code_scan",
+        "fields": [
+            {
+                "name": "min_severity",
+                "label": "Минимальная критичность",
+                "type": "enum",
+                "required": False,
+                "default": "medium",
+                "options": [{"value": severity, "label": _SEVERITY_LABELS.get(severity, severity)} for severity in SEVERITIES],
+                "help": "Находки ниже выбранного уровня в результаты не попадают.",
+            },
+            {
+                "name": "guidance",
+                "label": "Указания для анализа",
+                "type": "text",
+                "required": False,
+                "help": "На что анализатору обратить внимание при проверке кода.",
+            },
+        ],
+    }
+
+
 @app.post("/run/{scan_id}")
 async def run_scan(scan_id: int):
     """Тот же контракт, что у scanner-deepteam: запуск в фоне и мгновенный

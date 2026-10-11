@@ -5,12 +5,18 @@ import { PageHeader } from "../components/PageHeader";
 
 const emptyForm = { name: "", provider_type: "openai" as ProviderType, base_url: "", api_key: "", model: "gpt-4o-mini" };
 
-function maskApiKey(raw: string): string {
-  if (!raw) return "—";
-  const prefix = raw.match(/^[^*]+/)?.[0] ?? "";
-  const suffix = raw.match(/[^*]+$/)?.[0] ?? "";
-  if (prefix === suffix) return `${prefix}••••`;
-  return `${prefix}••••${suffix}`;
+// Короткая форма для таблицы: хост + начало пути, иначе длинный базовый URL
+// (например, с id аккаунта в пути) разъезжается. Полный адрес -- в title.
+function shortenBaseUrl(raw: string): string {
+  try {
+    const url = new URL(raw);
+    const path = url.pathname.replace(/\/+$/, "");
+    const maxPath = 16;
+    const trimmed = path.length > maxPath ? `${path.slice(0, maxPath)}…` : path;
+    return `${url.host}${trimmed}${url.search ? "…" : ""}`;
+  } catch {
+    return raw.length > 32 ? `${raw.slice(0, 32)}…` : raw;
+  }
 }
 
 export function LLMModels() {
@@ -125,7 +131,6 @@ export function LLMModels() {
               <th>Тип</th>
               <th>Модель</th>
               <th>Базовый URL</th>
-              <th>API-ключ</th>
               <th></th>
             </tr>
           </thead>
@@ -135,8 +140,12 @@ export function LLMModels() {
                 <td><strong>{m.name}</strong></td>
                 <td><span className="badge badge-neutral">{m.provider_type}</span></td>
                 <td><code>{m.model}</code></td>
-                <td style={{ color: "var(--text-600)" }}>{m.base_url}</td>
-                <td><code>{maskApiKey(m.api_key_masked)}</code></td>
+                <td
+                  title={m.base_url}
+                  style={{ color: "var(--text-600)", maxWidth: 260, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                >
+                  <code>{shortenBaseUrl(m.base_url)}</code>
+                </td>
                 <td>
                   <div style={{ display: "flex", gap: 8 }}>
                     <button className="btn btn-secondary" onClick={() => handleEdit(m)}>Изменить</button>
@@ -147,7 +156,7 @@ export function LLMModels() {
             ))}
             {llmModels.length === 0 && (
               <tr>
-                <td colSpan={6} style={{ color: "var(--text-500)", padding: "2.4rem", textAlign: "center" }}>
+                <td colSpan={5} style={{ color: "var(--text-500)", padding: "2.4rem", textAlign: "center" }}>
                   Пока нет моделей. Добавьте подключение к провайдеру.
                 </td>
               </tr>

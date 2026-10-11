@@ -33,6 +33,9 @@ def validate_flat(raw):
             elif mode == "bundle":
                 if not isinstance(c.get("artifact_id"), int):
                     raise ValueError("Нужен MCPB artifact_id")
+            elif mode == "bundle":
+                if not isinstance(c.get("artifact_id"), int):
+                    raise ValueError("Нужен MCPB artifact_id")
             else:
                 raise ValueError("SAST принимает исходники или репозиторий")
         elif mode == "snapshot":
@@ -62,6 +65,25 @@ def validate_flat(raw):
                     raise ValueError("Пробный вызов: {tool: имя, arguments: объект}")
             if engine == "mcp_dynamic" and probes and c.get("allow_tool_calls") is not True:
                 raise ValueError("Подтвердите пробные вызовы на тестовом сервере")
+        elif mode == "bundle":
+            if not isinstance(c.get("artifact_id"), int):
+                raise ValueError("Нужен MCPB artifact_id")
+            if engine == "semgrep":
+                pass  # SAST по исходникам архива
+            elif engine in {"mcpradar", "cisco_yara", "cisco_readiness", "cisco_prompt_defense"}:
+                pass  # каталог снимается по stdio после деплоя по манифесту
+            elif engine == "mcp_dynamic":
+                # Деплой по манифесту: сервер запускается и доступен по stdio.
+                probes = c.get("probes", [])
+                if not isinstance(probes, list) or len(probes) > 20:
+                    raise ValueError("Допустимо до 20 пробных вызовов")
+                for p in probes:
+                    if not isinstance(p, dict) or not isinstance(p.get("tool"), str) or not isinstance(p.get("arguments"), dict):
+                        raise ValueError("Пробный вызов: {tool: имя, arguments: объект}")
+                if probes and c.get("allow_tool_calls") is not True:
+                    raise ValueError("Подтвердите пробные вызовы на сервере из MCPB")
+            else:
+                raise ValueError("Для MCPB доступны Semgrep, сканеры каталога и динамическое тестирование")
         else:
             raise ValueError("Для этого движка нужны каталог или MCP URL")
         if engine == "snyk" and c.get("allow_cloud") is not True:

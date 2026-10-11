@@ -84,6 +84,42 @@ def _target_address(agent_config: dict) -> str | None:
     return None
 
 
+def _apply_remote_source(agent_config: dict) -> dict:
+    """Для источника remote -- то же, что launcher делает для своих подов
+    через agent_config_patch: собирает полный адрес взаимодействия.
+    remote_base_url + относительный путь из api_config.url /
+    langgraph_config.base_url (абсолютный путь или адрес используются как
+    есть); remote_headers -- заголовки авторизации агента, их явные значения
+    в api_config.headers имеют приоритет. Конфиг не мутируется -- он общий
+    для сканов."""
+    if agent_config.get("source") != "remote":
+        return agent_config
+    base = (agent_config.get("remote_base_url") or "").rstrip("/")
+    remote_headers = agent_config.get("remote_headers") or {}
+    patched = json.loads(json.dumps(agent_config))
+    if patched.get("interaction_mode") == "langgraph":
+        langgraph = dict(patched.get("langgraph_config") or {})
+        configured = str(langgraph.get("base_url") or "")
+        if configured and not configured.startswith(("http://", "https://")):
+            langgraph["base_url"] = base + (configured if configured.startswith("/") else "/" + configured)
+        elif not configured and base:
+            langgraph["base_url"] = base
+        patched["langgraph_config"] = langgraph
+    else:
+        api = dict(patched.get("api_config") or {})
+        configured = str(api.get("url") or "")
+        if configured and not configured.startswith(("http://", "https://")):
+            api["url"] = base + (configured if configured.startswith("/") else "/" + configured)
+        elif not configured and base:
+            api["url"] = base
+        if remote_headers:
+            headers = dict(remote_headers)
+            headers.update({k: v for k, v in (api.get("headers") or {}).items() if v})
+            api["headers"] = headers
+        patched["api_config"] = api
+    return patched
+
+
 def _wait_pod_ready(scan_id: int, namespace: str) -> None:
     hint = f"; диагностика: kubectl get pods -n {namespace}, kubectl logs -n {namespace} <под> -c agent"
     deadline = time.monotonic() + _POD_READY_TIMEOUT
@@ -242,34 +278,46 @@ def _run(scan_id: int, launched: list[bool]) -> None:
     _log(scan_id, f"Агент: {agent_config['name']} ({agent_config.get('interaction_mode')})", phase="Инициализация")
 
     _set_phase(scan_id, "Запуск агента")
-    _log(scan_id, "Сборка и запуск агента через launcher (это может занять несколько минут)...", phase="Запуск агента")
-    with httpx.Client(timeout=_BUILD_TIMEOUT) as client:
-        resp = client.post(f"{LAUNCHER_URL}/launch", json={"scan_id": scan_id})
-        if resp.status_code >= 400:
-            raise RuntimeError(f"launcher вернул {resp.status_code}: {resp.text[:500]}")
-        launch = resp.json()
-    _log(
-        scan_id,
-        f"Агент запущен: pod={launch.get('pod_name')} image={launch.get('built_image')}",
-        level="success",
-        phase="Запуск агента",
-    )
+    launch: dict = {}
+    if agent_config.get("source") == "remote":
+        _log(scan_id, "Агент remote: уже запущен вне платформы, сборка не требуется", phase="Запуск агента")
+    else:
+        _log(scan_id, "Сборка и запуск агента через launcher (это может занять несколько минут)...", phase="Запуск агента")
+        with httpx.Client(timeout=_BUILD_TIMEOUT) as client:
+            resp = client.post(f"{LAUNCHER_URL}/launch", json={"scan_id": scan_id})
+            if resp.status_code >= 400:
+                raise RuntimeError(f"launcher вернул {resp.status_code}: {resp.text[:500]}")
+            launch = resp.json()
+        _log(
+            scan_id,
+            f"Агент запущен: pod={launch.get('pod_name')} image={launch.get('built_image')}",
+            level="success",
+            phase="Запуск агента",
+        )
 
-    _set_phase(scan_id, "Ожидание агента")
-    _wait_pod_ready(scan_id, launch.get("namespace") or "<namespace>")
+        _set_phase(scan_id, "Ожидание агента")
+        _wait_pod_ready(scan_id, launch.get("namespace") or "<namespace>")
 
-    # Адрес агента этого скана -- из ответа launcher, а не из AgentConfig:
-    # конфигурация общая, и параллельный скан того же агента перезапишет в
-    # ней адрес своим подом.
-    agent_config = {**agent_config, **(launch.get("agent_config_patch") or {})}
+    # Адрес агента этого скана: для пода -- из ответа launcher, а не из
+    # AgentConfig (конфигурация общая, и параллельный скан того же агента
+    # перезапишет в ней адрес своим подом); для remote -- из remote_base_url
+    # с подстановкой токена.
+    agent_config = _apply_remote_source({**agent_config, **(launch.get("agent_config_patch") or {})})
     address = _target_address(agent_config)
     if not address:
+        if agent_config.get("source") == "remote":
+            raise RuntimeError(
+                "у remote-агента нет адреса: задайте remote_base_url и endpoint в api_config (или base_url в langgraph_config)"
+            )
         raise RuntimeError(
             "у агента нет reachable-адреса (задайте api_port в конфиге агента, чтобы launcher пробросил NodePort)"
         )
+    if agent_config.get("source") == "remote":
+        _set_phase(scan_id, "Ожидание агента")
     _log(scan_id, f"Адрес агента: {address}", phase="Ожидание агента")
     _wait_http_ready(scan_id, _probe_url(agent_config, address))
-    launched[0] = True
+    if agent_config.get("source") != "remote":
+        launched[0] = True
 
     _set_phase(scan_id, "Тестирование")
     _log(scan_id, "Запуск DeepTeam red teaming...", phase="Тестирование")

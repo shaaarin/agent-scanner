@@ -2,14 +2,19 @@ import asyncio
 import json
 import os
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 from app.process import execute
-from app.target import inspect, dynamic, validate_url
+from app.target import bundle_extract, bundle_inspect, inspect, dynamic, validate_url
 
 
 def cisco(c, work):
-    tools = c.get("tools") if c["mode"] == "snapshot" else asyncio.run(inspect(c))
+    if c["mode"] == "snapshot":
+        tools = c.get("tools")
+    elif c["mode"] == "bundle":
+        tools = asyncio.run(bundle_inspect(c))
+    else:
+        tools = asyncio.run(inspect(c))
     if not tools or not tools.get("tools"):
         raise ValueError("Пустой каталог MCP")
     path = work / "tools.json"
@@ -47,7 +52,12 @@ def cisco(c, work):
 
 
 def mcpradar(c, work):
-    tools = c.get("tools") if c["mode"] == "snapshot" else asyncio.run(inspect(c))
+    if c["mode"] == "snapshot":
+        tools = c.get("tools")
+    elif c["mode"] == "bundle":
+        tools = asyncio.run(bundle_inspect(c))
+    else:
+        tools = asyncio.run(inspect(c))
     path = work / "tools.json"
     path.write_text(json.dumps(tools))
     rc, stdout, stderr = execute(["/opt/mcpradar/bin/python", "/srv/app/radar_sdk.py", str(path)], cwd=work, timeout=min(180, c.get("timeout_seconds", 300)))
@@ -97,35 +107,25 @@ def sast(c, work):
     root.mkdir()
     commit = None
     if c["mode"] == "bundle":
-        import io
-        import zipfile
-        from app.control_client import _client
-        response = _client.get(f"/mcp-artifacts/{c['artifact_id']}/content")
-        response.raise_for_status()
-        if len(response.content) > 50 * 1024 * 1024:
-            raise ValueError("MCPB превышает 50 МБ")
-        with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
-            infos = archive.infolist()
-            if len(infos) > 5000 or sum(i.file_size for i in infos) > 250 * 1024 * 1024:
-                raise ValueError("Превышен лимит распаковки MCPB")
-            for info in infos:
-                path = Path(info.filename)
-                if path.is_absolute() or ".." in path.parts or "\\" in info.filename or (info.external_attr >> 16) & 0o170000 == 0o120000:
-                    raise ValueError("Небезопасный путь MCPB")
-                if info.is_dir() or path.suffix not in {".py", ".js", ".ts", ".tsx", ".jsx"}:
-                    continue
-                dest = root / path
-                dest.parent.mkdir(parents=True, exist_ok=True)
-                dest.write_bytes(archive.read(info))
+        manifest = bundle_extract(c, root, code_only=True)
     elif c["mode"] == "repository":
-        if c.get("git_access_token"):
-            raise ValueError("SAST: приватный Git с токеном пока не поддерживается; загрузите MCPB или исходники")
+        # Валидируем чистый URL; токен подставляем в netloc по конвенции
+        # GitLab (oauth2:<token>@host), как в launcher/app/git_auth.py.
         url = validate_url(c["repository_url"])
         if urlsplit(url).scheme != "https":
             raise ValueError("Репозитории принимаются только по HTTPS")
-        rc, _, _ = execute(["git", "-c", "http.followRedirects=false", "-c", "protocol.file.allow=never", "clone", "--depth", "1", "--single-branch", "--branch", c.get("git_ref", "main"), "--", url, str(root)], timeout=min(120, c.get("timeout_seconds", 300)))
+        # GitLab отдаёт редирект на ...git, а редиректы запрещены (защита
+        # токена от утечки на чужой хост) -- нормализуем суффикс.
+        if not url.rstrip("/").endswith(".git"):
+            url = url.rstrip("/") + ".git"
+        clone_url = url
+        token = c.get("git_access_token")
+        if token:
+            # urlunparse в 3.13 спотыкается о SplitResult -- подставляем строкой.
+            clone_url = url.replace("https://", f"https://oauth2:{quote(token)}@", 1)
+        rc, _, _ = execute(["git", "-c", "http.followRedirects=false", "-c", "protocol.file.allow=never", "clone", "--depth", "1", "--single-branch", "--branch", c.get("git_ref", "main"), "--", clone_url, str(root)], timeout=min(120, c.get("timeout_seconds", 300)))
         if rc:
-            raise RuntimeError("Не удалось клонировать репозиторий. Проверьте публичный HTTPS URL и ветку.")
+            raise RuntimeError("Не удалось клонировать репозиторий. Проверьте HTTPS URL, токен доступа и ветку.")
         _, commit, _ = execute(["git", "rev-parse", "HEAD"], cwd=root)
         commit = commit.strip()
     else:
@@ -154,6 +154,21 @@ def sast(c, work):
     return dict(findings=findings, files_checked=len(scanned), commit=commit, raw=raw, coverage="6 MCP-правил AST, Python @*.tool и JS/TS tool/registerTool. Нет межфайлового taint, доказательства авторизации и полного покрытия async/обёрток. Отсутствие находок не доказывает безопасность.")
 
 
+async def run_mcp_dynamic(c):
+    """Динамика: для remote -- по HTTP, для MCPB -- деплой по манифесту
+    (установка зависимостей, запуск сервера) и сеанс по stdio."""
+    import tempfile
+    from app.target import dynamic, run_dynamic, stdio_session_for_bundle
+    if c["mode"] == "bundle":
+        with tempfile.TemporaryDirectory(prefix="mcp-bundle-") as tmp:
+            root = Path(tmp) / "bundle"
+            root.mkdir()
+            manifest = bundle_extract(c, root, code_only=False)
+            async with stdio_session_for_bundle(root, manifest, c.get("user_config") or {}) as session:
+                return await run_dynamic(session, c)
+    return await dynamic(c)
+
+
 def scan(c, work):
     engine = c["engine"]
     if engine.startswith("cisco_"):
@@ -165,5 +180,5 @@ def scan(c, work):
     if engine == "semgrep":
         return sast(c, work)
     if engine == "mcp_dynamic":
-        return asyncio.run(asyncio.wait_for(dynamic(c), timeout=min(180, c.get("timeout_seconds", 300))))
+        return asyncio.run(asyncio.wait_for(run_mcp_dynamic(c), timeout=min(300, c.get("timeout_seconds", 300))))
     raise ValueError("Неизвестный движок")

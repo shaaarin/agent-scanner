@@ -28,6 +28,11 @@ OpenAI, OpenRouter, self-hosted vLLM/Ollama и т.п.
 (Enterprise On-Prem) задайте `PROMPTFOO_CODE_SCAN_API_HOST`. После
 изменения ключа пересоздайте сервис: `docker compose up -d scanner-promptfoo`.
 
+Анализ AI-кода (`scanner-semgrep`) ключей не требует: semgrep выполняется
+локально, код агента никуда не отправляется. Дополнительные официальные
+наборы правил (`p/...`) скачиваются из Semgrep Registry при скане — этому
+контейнеру нужен исходящий интернет.
+
 ## 2. Запуск стека
 
 ```
@@ -39,13 +44,14 @@ docker compose up -d --build
 | Сервис | Адрес |
 |---|---|
 | `control-api` | http://localhost:8000 |
+| `postgres` | только внутренняя сеть (`postgres:5432`), данные в томе `control-api-pg-data` |
 | `web` | http://localhost:4173 |
 | `proxy` | http://localhost:8100 |
 | `launcher` | http://localhost:8400 |
 
-Сканеры `scanner-deepteam` и `scanner-promptfoo` работают без опубликованного
-порта — `control-api` обращается к ним по внутренней сети. Проверка:
-`curl localhost:8000/health`.
+Сканеры `scanner-deepteam`, `scanner-promptfoo` и `scanner-semgrep`
+работают без опубликованного порта — `control-api` обращается к ним по
+внутренней сети. Проверка: `curl localhost:8000/health`.
 
 > Если стек поднимался до разделения сканеров, удалите старый контейнер
 > `scanner`: `docker compose up -d --build --remove-orphans`.
@@ -53,7 +59,7 @@ docker compose up -d --build
 Только анализ кода, без кластера (сеть `kind` не нужна):
 
 ```
-docker compose up -d --build control-api web scanner-promptfoo
+docker compose up -d --build control-api web scanner-promptfoo scanner-semgrep
 ```
 
 ## 3. Включение `launcher` и `scanner-deepteam`
@@ -252,9 +258,10 @@ category: agents         # необязательно, иначе имя пап�
 # Тело материала (Markdown, поддерживаются таблицы)
 ```
 
-## 10. Миграции базы
+## 10. База данных и миграции
 
-`control-api` применяет Alembic на старте. После изменения
+Хранилище — PostgreSQL (сервис `postgres`); `control-api` подключается по
+`DATABASE_URL` и применяет Alembic на старте. После изменения
 `control-api/app/models.py`:
 
 ```
@@ -265,6 +272,25 @@ docker compose restart control-api     # применит миграцию
 
 Тома не удаляются — данные сохраняются. Ревизии пишутся в
 `control-api/app/migrations/versions/` (папка смонтирована на хост).
+
+### Разовый перенос данных из старой SQLite-базы
+
+Стек до миграции хранил данные в sqlite-файле на томе
+`agent-scanner_control-api-data`. Том сохранён; чтобы перенести данные
+(сканы, журналы, активы, MCPB-архивы) в PostgreSQL, после первого запуска
+нового стека выполните:
+
+```
+docker compose run --rm \
+  -v agent-scanner_control-api-data:/legacy:ro \
+  control-api python scripts/migrate_sqlite_to_pg.py /legacy/control-api.db
+```
+
+Скрипт сверит счётчики строк по всем таблицам и выставит
+последовательности id. Повторный запуск на непустой базе прерывается;
+`--truncate` очищает целевые таблицы и позволяет перелить заново.
+Убедиться в результате: `docker compose exec postgres
+psql -U agent_scanner -d agent_scanner -c '\dt'`.
 
 ## 11. Диагностика
 

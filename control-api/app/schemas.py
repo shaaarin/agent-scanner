@@ -4,6 +4,8 @@ from typing import Annotated, Any, Literal, Optional, Union
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator, model_validator
 
 from app.models import (
+    AgentSource,
+    AssetKind,
     EventDirection,
     InjectionTrialStatus,
     InjectionVerdict,
@@ -11,6 +13,8 @@ from app.models import (
     ProviderType,
     ScanLogLevel,
     ScanStatus,
+    ScanType,
+    SkillSource,
 )
 
 
@@ -42,7 +46,9 @@ class LLMModelUpdate(BaseModel):
 
 class AgentConfigCreate(BaseModel):
     name: str
-    git_repo_url: str
+    source: AgentSource = AgentSource.REPOSITORY
+    # source=repository: сборка платформой из git.
+    git_repo_url: Optional[str] = None
     git_ref: str = "main"
     git_access_token: Optional[str] = None
     dockerfile_path: str = "Dockerfile"
@@ -51,14 +57,29 @@ class AgentConfigCreate(BaseModel):
     entrypoint: Optional[list[str]] = None
     env_vars: dict[str, str] = {}
     resources: Optional[dict] = None
+    # source=remote: уже запущенный агент вне платформы.
+    remote_base_url: Optional[str] = None
+    # Заголовки авторизации произвольными парами «имя: значение»
+    remote_headers: dict[str, str] = {}
     agent_purpose: Optional[str] = None
     interaction_mode: InteractionMode = InteractionMode.NONE
     api_config: Optional[dict] = None
     langgraph_config: Optional[dict] = None
 
+    @model_validator(mode="after")
+    def require_source_fields(self) -> "AgentConfigCreate":
+        if self.source == AgentSource.REPOSITORY and not (self.git_repo_url or "").strip():
+            raise ValueError("для источника «repository» нужен git_repo_url")
+        if self.source == AgentSource.REMOTE:
+            base = (self.remote_base_url or "").strip()
+            if not base.lower().startswith(("http://", "https://")):
+                raise ValueError("для источника «remote» нужен remote_base_url (http:// или https://)")
+        return self
+
 
 class AgentConfigUpdate(BaseModel):
     name: Optional[str] = None
+    source: Optional[AgentSource] = None
     git_repo_url: Optional[str] = None
     git_ref: Optional[str] = None
     git_access_token: Optional[str] = None
@@ -68,6 +89,8 @@ class AgentConfigUpdate(BaseModel):
     entrypoint: Optional[list[str]] = None
     env_vars: Optional[dict[str, str]] = None
     resources: Optional[dict] = None
+    remote_base_url: Optional[str] = None
+    remote_headers: Optional[dict[str, str]] = None
     agent_purpose: Optional[str] = None
     interaction_mode: Optional[InteractionMode] = None
     api_config: Optional[dict] = None
@@ -216,6 +239,98 @@ class ScanUpdate(BaseModel):
     agent_pod_name: Optional[str] = None
     build_job_name: Optional[str] = None
     built_image: Optional[str] = None
+
+
+class ScanCreate(BaseModel):
+    """Создание скана из UI: всегда внутри актива. Параметры сканера
+    (`config`) валидируются по реестру сканеров, статус/результаты клиент
+    задавать не может."""
+
+    name: str = Field(min_length=1)
+    type: ScanType
+    asset_kind: AssetKind
+    asset_id: int = Field(gt=0)
+    session_id: str = Field(min_length=1)
+    # Параметры выбранного сканера (поля -- из GET /scanners config_schema).
+    # Для MCP цель подставляется из актива, здесь только scanner_ids и т.п.
+    config: dict = Field(default_factory=dict)
+
+
+class McpDeploySettings(BaseModel):
+    """Необязательные настройки деплоя MCP-актива для динамического
+    сканирования: как поднять сервер из репозитория/MCPB. Заполнение не
+    влияет на существующие движки -- данные под грядущий деплой."""
+
+    port: Optional[int] = Field(default=None, ge=1, le=65535)
+    dockerfile_path: Optional[str] = None  # сборка образа сервера, как у агентов
+    mcp_path: Optional[str] = None  # путь MCP-эндпоинта, например /mcp
+    command: Optional[str] = None
+    env: dict[str, str] = Field(default_factory=dict)
+
+
+class McpAssetCreate(BaseModel):
+    name: str = Field(min_length=1)
+    description: Optional[str] = None
+    # Форма MCPTarget (remote/repository/bundle); source/snapshot как цели
+    # сканов не используются -- это режимы ad-hoc проверок.
+    config: MCPTarget
+    deploy: Optional[McpDeploySettings] = None
+
+
+class McpAssetUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    config: Optional[MCPTarget] = None
+    deploy: Optional[McpDeploySettings] = None
+
+
+class SkillAssetCreate(BaseModel):
+    name: str = Field(min_length=1)
+    description: Optional[str] = None
+    source: SkillSource = SkillSource.REPOSITORY
+    git_repo_url: Optional[str] = None
+    git_ref: Optional[str] = "main"
+    git_access_token: Optional[str] = None
+
+    @model_validator(mode="after")
+    def require_source_fields(self) -> "SkillAssetCreate":
+        if self.source == SkillSource.REPOSITORY and not (self.git_repo_url or "").strip():
+            raise ValueError("для источника «repository» нужен git_repo_url")
+        return self
+
+
+class SkillAssetUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    git_repo_url: Optional[str] = None
+    git_ref: Optional[str] = None
+    git_access_token: Optional[str] = None
+
+
+class SkillAssetRead(BaseModel):
+    """Ответ API без бинарного архива."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+    description: Optional[str]
+    source: SkillSource
+    git_repo_url: Optional[str]
+    git_ref: Optional[str]
+    archive_filename: Optional[str]
+    archive_sha256: Optional[str]
+    created_at: datetime
+
+
+class AssetRead(BaseModel):
+    """Единая запись раздела «Активы» (объединяет три вида)."""
+
+    kind: AssetKind
+    id: int
+    name: str
+    description: Optional[str] = None
+    created_at: datetime
 
 
 class ScanLogCreate(BaseModel):

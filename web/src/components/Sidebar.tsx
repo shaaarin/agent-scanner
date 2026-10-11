@@ -3,10 +3,9 @@ import { Icon, type IconName } from "./Icon";
 
 const items: { to: string; label: string; icon: IconName; end?: boolean }[] = [
   { to: "/", label: "Главная", icon: "home", end: true },
+  { to: "/assets", label: "Активы", icon: "agent" },
   { to: "/scans", label: "Сканирования", icon: "scans" },
-  { to: "/mcp-scanners", label: "MCP-сканеры", icon: "scans" },
   { to: "/llm-models", label: "LLM-модели", icon: "llm" },
-  { to: "/agent-configs", label: "Конфигурации агентов", icon: "agent" },
   { to: "/library", label: "Библиотека знаний", icon: "library" },
   { to: "/help", label: "Справка", icon: "library" },
   { to: "/events", label: "События", icon: "events" },
@@ -57,8 +56,8 @@ export function Sidebar() {
           }}
         >
           <img
-            src="https://cabinet.miem.hse.ru/miem-logo-square.svg"
-            alt="MIEM"
+            src="/emblem.svg"
+            alt="Agent Scanner"
             style={{ width: "100%", height: "100%", objectFit: "contain" }}
           />
         </span>

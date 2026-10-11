@@ -1,11 +1,13 @@
 import type { CodeScanSeverity, ScanType } from "./types";
 
 export const SCAN_TYPE_LABELS: Record<ScanType, string> = {
-  deep_team: "Динамическое тестирование",
-  code_scan: "Анализ кода",
-  indirect_injection: "Косвенные инъекции",
-  system_prompt_leak: "Утечка системного промпта",
-  mcp: "MCP",
+  deep_team: "[динамическое тестирование] DeepTeam",
+  pyrit_scan: "[динамическое тестирование] PyRIT",
+  code_scan: "[статический анализ] Promptfoo",
+  ai_code_scan: "[статический анализ] Semgrep (AI-код)",
+  indirect_injection: "[динамическое тестирование] Косвенные инъекции",
+  system_prompt_leak: "[динамическое тестирование] Утечка системного промпта",
+  mcp: "[статический и динамический анализ] MCP",
   agent_skills: "Agent Skills",
 };
 
@@ -13,42 +15,8 @@ export function scanTypeLabel(type: string): string {
   return SCAN_TYPE_LABELS[type as ScanType] ?? type;
 }
 
-// Фазы, которые пишет сканер каждого типа (Scan.phase), в порядке прохождения.
-export const SCAN_PHASES: Partial<Record<ScanType, string[]>> = {
-  mcp: ["Инициализация", "Проверка MCP", "Сохранение результатов", "Завершено"],
-  deep_team: [
-    "Инициализация",
-    "Запуск агента",
-    "Ожидание агента",
-    "Тестирование",
-    "Сохранение результатов",
-    "Завершено",
-  ],
-  code_scan: [
-    "Инициализация",
-    "Клонирование",
-    "Анализ кода",
-    "Сохранение результатов",
-    "Завершено",
-  ],
-  indirect_injection: [
-    "Инициализация",
-    "Запуск агента",
-    "Ожидание агента",
-    "Базовый прогон",
-    "Фаззинг",
-    "Сохранение результатов",
-    "Завершено",
-  ],
-  system_prompt_leak: [
-    "Инициализация",
-    "Запуск агента",
-    "Ожидание агента",
-    "Тестирование",
-    "Сохранение результатов",
-    "Завершено",
-  ],
-};
+// Лейблы типов сканов и фазы приходят из реестра сканеров (GET /scanners);
+// здесь -- только fallback для типов без сканера (agent_skills).
 
 export const SEVERITY_ORDER: CodeScanSeverity[] = ["critical", "high", "medium", "low"];
 

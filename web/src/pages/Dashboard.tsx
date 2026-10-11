@@ -3,11 +3,16 @@ import { PageHeader } from "../components/PageHeader";
 import { Icon, type IconName } from "../components/Icon";
 
 const tiles: { to: string; label: string; description: string; icon: IconName }[] = [
-  {to: "/mcp-scanners", label: "MCP-сканеры", description: "Статический анализ MCP и динамические проверки на локальном стенде.", icon: "scans"},
+  {
+    to: "/assets",
+    label: "Активы",
+    description: "Агенты, MCP-серверы и skills: добавляйте активы и запускайте для них проверки.",
+    icon: "agent",
+  },
   {
     to: "/scans",
     label: "Сканирования",
-    description: "Запуск динамического тестирования агента и наблюдение за ходом проверки.",
+    description: "Все запуски проверок: динамическое тестирование, анализ кода, MCP и инъекции.",
     icon: "scans",
   },
   {
@@ -15,12 +20,6 @@ const tiles: { to: string; label: string; description: string; icon: IconName }[
     label: "LLM-модели",
     description: "Провайдеры и модели, которые оценивают ответы агента и порождают атаки.",
     icon: "llm",
-  },
-  {
-    to: "/agent-configs",
-    label: "Конфигурации агентов",
-    description: "Откуда брать агента, как его запускать и как с ним общаться.",
-    icon: "agent",
   },
   {
     to: "/library",

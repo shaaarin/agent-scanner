@@ -51,8 +51,8 @@ def delete_agent_config(agent_config_id: int, session: Session = Depends(get_ses
     agent_config = session.get(AgentConfig, agent_config_id)
     if not agent_config:
         raise HTTPException(status_code=404, detail="agent config not found")
-    # SQLite не проверяет внешние ключи: без этой проверки сканы агента
-    # остались бы без конфигурации и не открывались бы и не запускались.
+    # Понятный 409 вместо IntegrityError от внешнего ключа: без этой проверки
+    # сканы агента остались бы без конфигурации и не открывались бы и не запускались.
     scans = session.exec(select(Scan).where(Scan.agent_config_id == agent_config_id)).all()
     if scans:
         raise HTTPException(

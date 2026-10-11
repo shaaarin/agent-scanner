@@ -1,5 +1,6 @@
 export type ProviderType = "openai" | "anthropic";
 export type InteractionMode = "none" | "api" | "langgraph";
+export type AgentSource = "repository" | "remote";
 
 export interface TrafficEvent {
   id: number;
@@ -51,9 +52,12 @@ export interface LaunchStatus {
 export interface AgentConfig {
   id: number;
   name: string;
-  git_repo_url: string;
+  source: AgentSource;
+  git_repo_url: string | null;
   git_ref: string;
   git_access_token: string | null;
+  remote_base_url: string | null;
+  remote_headers: Record<string, string> | null;
   dockerfile_path: string;
   env_example_path: string | null;
   api_port: number | null;
@@ -67,13 +71,16 @@ export interface AgentConfig {
   created_at: string;
 }
 
-export type ScanType = "deep_team" | "code_scan" | "indirect_injection" | "system_prompt_leak" | "mcp" | "agent_skills";
+export type ScanType = "deep_team" | "pyrit_scan" | "code_scan" | "ai_code_scan" | "indirect_injection" | "system_prompt_leak" | "mcp" | "agent_skills";
 export type ScanStatus = "pending" | "running" | "completed" | "failed";
+export type AssetKind = "agent" | "mcp" | "skill";
 
 export interface Scan {
   id: number;
   name: string;
   type: ScanType;
+  asset_kind: AssetKind | null;
+  asset_id: number | null;
   agent_config_id: number | null;
   status: ScanStatus;
   session_id: string;
@@ -88,6 +95,94 @@ export interface Scan {
   created_at: string;
   started_at: string | null;
   finished_at: string | null;
+}
+
+// Раздел «Активы»: единая запись из GET /assets.
+export interface Asset {
+  kind: AssetKind;
+  id: number;
+  name: string;
+  description: string | null;
+  created_at: string;
+}
+
+export interface McpDeploySettings {
+  port?: number | null;
+  command?: string | null;
+  env: Record<string, string>;
+}
+
+export interface McpAsset {
+  id: number;
+  name: string;
+  description: string | null;
+  config: MCPTarget;
+  deploy: McpDeploySettings | null;
+  created_at: string;
+}
+
+export interface McpAssetCreate {
+  name: string;
+  description?: string | null;
+  config: MCPTarget;
+  deploy?: McpDeploySettings | null;
+}
+
+export type SkillSource = "repository" | "zip";
+
+export interface SkillAsset {
+  id: number;
+  name: string;
+  description: string | null;
+  source: SkillSource;
+  git_repo_url: string | null;
+  git_ref: string | null;
+  archive_filename: string | null;
+  archive_sha256: string | null;
+  created_at: string;
+}
+
+// Реестр сканеров (GET /scanners): UI строит формы создания сканирований
+// только из этих данных, никаких списков опций на фронте.
+export type ScannerFieldType = "string" | "text" | "text_list" | "integer" | "boolean" | "enum" | "enum_multi" | "llm_model" | "json";
+
+export interface ScannerFieldOption {
+  value: string | number;
+  label: string;
+  available?: boolean;
+  cloud?: boolean;
+  modes?: string[];
+  description?: string;
+}
+
+export interface ScannerField {
+  name: string;
+  label: string;
+  type: ScannerFieldType;
+  required?: boolean;
+  default?: unknown;
+  options?: ScannerFieldOption[];
+  help?: string;
+}
+
+export interface ScannerConfigSchema {
+  type: string;
+  fields: ScannerField[];
+}
+
+export interface ScannerRegistration {
+  type: ScanType;
+  name: string;
+  description: string;
+  service: string;
+  asset_kinds: AssetKind[];
+  phases: string[];
+  available: boolean;
+  config_schema: ScannerConfigSchema | null;
+  // Применимость к конкретному активу (заполнено, когда /scanners вызван
+  // с asset_kind+asset_id).
+  available_for_asset?: boolean | null;
+  unavailable_reason?: string | null;
 }
 
 export interface LibraryArticle {
@@ -180,9 +275,12 @@ export interface CodeScanFinding {
   ai_agent_prompt: string | null;
 }
 
-// Scan.results для type = "code_scan" (пишет scanner-promptfoo).
+// Scan.results для type = "code_scan" (пишет scanner-promptfoo) и
+// "ai_code_scan" (пишет scanner-semgrep -- тот же формат находок).
 export interface CodeScanResults {
   engine: string;
+  // Название движка для строки метаданных; по умолчанию "promptfoo".
+  engine_label?: string;
   engine_version?: string;
   git_ref?: string;
   commit?: string;

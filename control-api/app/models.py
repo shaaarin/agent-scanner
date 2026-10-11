@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Optional
 
-from sqlalchemy import Column, JSON, LargeBinary, Text
+from sqlalchemy import Column, JSON, LargeBinary, String, Text
 from sqlmodel import Field, SQLModel
 
 
@@ -39,6 +39,18 @@ class InteractionMode(str, Enum):
     LANGGRAPH = "langgraph"
 
 
+class AgentSource(str, Enum):
+    """Откуда берётся тестируемый агент:
+    - repository -- собирается платформой из git (launcher: clone + Kaniko +
+      Pod с MITM-сайдкаром);
+    - remote -- уже запущен вне платформы, сборка не нужна: платформа ходит
+      напрямую по `remote_base_url` (+ `remote_token` как Authorization).
+      Трафик такого агента к LLM через прокси платформы не проходит."""
+
+    REPOSITORY = "repository"
+    REMOTE = "remote"
+
+
 class AgentConfig(SQLModel, table=True):
     """How to build and launch a tested agent in Kubernetes, and if needed,
     how to hold a conversation with it (its external API surface --
@@ -56,11 +68,25 @@ class AgentConfig(SQLModel, table=True):
 
     id: Optional[int] = Field(default=None, primary_key=True)
     name: str = Field(index=True, unique=True)
-    git_repo_url: str
+    # Колонка строковая и хранит значения ('repository'/'remote'), как
+    # Scan.asset_kind -- иначе расходятся ORM, миграция и строковые фильтры.
+    source: AgentSource = Field(
+        default=AgentSource.REPOSITORY,
+        sa_column=Column(String, nullable=False, server_default="repository"),
+    )
+    # source=repository: агент собирается платформой из git.
+    git_repo_url: Optional[str] = None
     git_ref: str = "main"
     git_access_token: Optional[str] = (
         None  # PAT for private HTTPS repos -- see launcher/app/git_auth.py. Plain text, same accepted MVP tech debt as LLMModel.api_key.
     )
+    # source=remote: уже запущенный агент. Адрес (scheme://host[:port]),
+    # эндпоинт и тело запроса -- в api_config/langgraph_config; заголовки
+    # авторизации -- произвольные пары «имя: значение» (например,
+    # Authorization: Bearer ... или X-API-Key). Plain text, тот же принятый
+    # техдолг MVP, что и остальные креды.
+    remote_base_url: Optional[str] = None
+    remote_headers: dict[str, str] = Field(default_factory=dict, sa_column=Column(JSON))
     dockerfile_path: str = "Dockerfile"  # path to the Dockerfile, relative to the repo root (build context is always the repo root)
     env_example_path: Optional[str] = (
         None  # e.g. ".env.example" -- launcher reads this to auto-fill env_vars with the repo's own declared defaults
@@ -121,13 +147,71 @@ class TrafficEvent(SQLModel, table=True):
     created_at: datetime = Field(default_factory=utcnow)
 
 
+class AssetKind(str, Enum):
+    """Виды активов раздела «Активы». Активы агентов хранятся как `AgentConfig`,
+    MCP-цели -- `McpAsset`, skills -- `SkillAsset`; объединяет их реестр
+    сканеров (`app/scanner_registry.py`), где для каждого сканера указано,
+    на каких видах активов он работает."""
+
+    AGENT = "agent"
+    MCP = "mcp"
+    SKILL = "skill"
+
+
+class McpAsset(SQLModel, table=True):
+    """Актив «MCP»: цель тестирования -- работающий сервер, git-репозиторий
+    или загруженный MCPB-архив (см. `MCPTarget` в app/schemas.py). При
+    создании скана control-api копирует `config` в `Scan.config.target`, так
+    что контракт scanner-mcp не меняется, а правки актива не переписывают
+    уже созданные сканы."""
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    name: str = Field(index=True, unique=True)
+    description: Optional[str] = Field(default=None, sa_column=Column(Text))
+    # Форма MCPTarget: {"kind": "remote|repository|bundle", ...}
+    config: dict = Field(default_factory=dict, sa_column=Column(JSON))
+    # Необязательные настройки деплоя для динамического сканирования
+    # (запуск сервера из репозитория/MCPB): {"port": int, "command": str,
+    # "env": {...}}. Заполнены -- только если пользователь их задал.
+    deploy: Optional[dict] = Field(default=None, sa_column=Column(JSON))
+    created_at: datetime = Field(default_factory=utcnow)
+
+
+class SkillSource(str, Enum):
+    REPOSITORY = "repository"
+    ZIP = "zip"
+
+
+class SkillAsset(SQLModel, table=True):
+    """Актив «Skill»: набор skills агента из git-репозитория или zip-архива.
+    Сканера для skills пока нет -- активы создаются заранее, реестр сканеров
+    не содержит типов для вида `skill`."""
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    name: str = Field(index=True, unique=True)
+    description: Optional[str] = Field(default=None, sa_column=Column(Text))
+    source: SkillSource = SkillSource.REPOSITORY
+    # source=repository: HTTPS-репозиторий (токен -- принятый техдолг MVP,
+    # как AgentConfig.git_access_token).
+    git_repo_url: Optional[str] = None
+    git_ref: Optional[str] = None
+    git_access_token: Optional[str] = None
+    # source=zip: архив хранится BLOB-ом (по образцу MCPArtifact).
+    archive_filename: Optional[str] = None
+    archive_sha256: Optional[str] = Field(default=None, index=True)
+    archive: Optional[bytes] = Field(default=None, sa_column=Column(LargeBinary))
+    created_at: datetime = Field(default_factory=utcnow)
+
+
 class ScanType(str, Enum):
     """Каждый реализованный тип выполняет свой сервис-сканер (см.
     `app/api/scans.py::SCANNERS`). Колонка `scan.type` строковая, поэтому новый
     тип не требует миграции."""
 
     DEEP_TEAM = "deep_team"  # scanner-deepteam: динамическое тестирование
+    PYRIT_SCAN = "pyrit_scan"  # scanner-pyrit: red teaming через Microsoft PyRIT
     CODE_SCAN = "code_scan"  # scanner-promptfoo: анализ исходного кода
+    AI_CODE_SCAN = "ai_code_scan"  # scanner-semgrep: локальный semgrep AI-правил по коду агента
     INDIRECT_INJECTION = "indirect_injection"  # scanner-indirect: косвенные инъекции в результаты инструментов
     SYSTEM_PROMPT_LEAK = "system_prompt_leak"  # scanner-sysleak: утечка системного промпта
     MCP = "mcp"  # scanner-mcp: metadata, dynamic and SAST
@@ -144,7 +228,7 @@ class ScanStatus(str, Enum):
 class MCPArtifact(SQLModel, table=True):
     """An immutable MCPB uploaded by the user or materialized from HTTPS.
 
-    The archive stays as a BLOB in SQLite for the MVP. List/read schemas never
+    The archive stays as a BLOB in PostgreSQL for the MVP. List/read schemas never
     expose ``content``; a future scanner-mcp service will request it through a
     dedicated endpoint immediately before scanning.
     """
@@ -168,6 +252,14 @@ class Scan(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     name: str = Field(index=True)
     type: ScanType
+    # Ссылка на актив из раздела «Активы» (см. AssetKind). Для агентов
+    # дублируется в agent_config_id: все сканеры и launcher читают только его.
+    # Колонка строковая и хранит ЗНАЧЕНИЯ ('agent'/'mcp'/'skill') -- иначе
+    # строковые фильтры API и backfill миграции расходились бы с ORM.
+    asset_kind: Optional[AssetKind] = Field(
+        default=None, sa_column=Column(String, nullable=True, index=True)
+    )
+    asset_id: Optional[int] = Field(default=None, index=True)
     # Agent-backed scans (deep_team, code_scan) require this reference at the
     # API level. Remote targets such as an MCP server do not have an
     # AgentConfig, so the database relationship itself is optional.
@@ -176,7 +268,11 @@ class Scan(SQLModel, table=True):
     session_id: str = Field(index=True)  # Links scan to proxy session
     # JSON config specific to scan type:
     # - DEEP_TEAM: {"eval_llm_model_id": int, "vulnerabilities": [...], "attacks": [...]}
+    # - PYRIT_SCAN: {"eval_llm_model_id": int, "objectives": [str], "strategies": [str],
+    #                "converters": [str], "max_turns": int}
     # - CODE_SCAN: {"min_severity": "low|medium|high|critical", "guidance": str | null}
+    # - AI_CODE_SCAN: {"min_severity": "low|medium|high", "rule_sets": [str],
+    #                  "custom_rules": str | null}
     # - INDIRECT_INJECTION: {"tasks": [str], "target_tools": [str], "payloads": [str],
     #                        "repeats": int, "max_trials": int}
     # - MCP: {"target": {"kind": "remote|repository|bundle", ...},
@@ -185,7 +281,9 @@ class Scan(SQLModel, table=True):
     config: str = Field(default="{}", sa_column=Column(JSON))
     # JSON results, shape depends on type:
     # - DEEP_TEAM: {"vulnerability_results": [...], "overall_score": float}
+    # - PYRIT_SCAN: {"vulnerability_results": [...], "overall_score": float}
     # - CODE_SCAN: {"engine": "promptfoo-code-scans", "summary": {...}, "findings": [...], ...}
+    # - AI_CODE_SCAN: {"engine": "semgrep", "summary": {...}, "findings": [...], ...}
     # - INDIRECT_INJECTION: {"engine": "indirect-injection", "summary": {...},
     #                        "by_tool": [...], "by_payload": [...], "trials": [...]}
     results: Optional[str] = Field(default=None, sa_column=Column(JSON))
