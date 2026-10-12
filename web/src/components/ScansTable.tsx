@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import type { Scan } from "../api/types";
-import { scanTypeLabel } from "../api/scanTypes";
+import { displayedScanStatus, scanTypeLabel } from "../api/scanTypes";
 
 // Таблица сканов с polling выполняющихся. Используется и на общей странице
 // «Сканирования», и в карточке актива: onLoad задаёт источник списка
@@ -13,12 +13,16 @@ export function ScanStatusBadge({ status }: { status: string }) {
     pending: "badge-secondary",
     running: "badge-primary",
     completed: "badge-success",
+    success: "badge-success",
+    partially_failed: "badge-warning",
     failed: "badge-danger",
   };
   const labels: Record<string, string> = {
     pending: "Ожидает запуска",
     running: "Выполняется",
     completed: "Завершено",
+    success: "Успешно выполнено",
+    partially_failed: "Частично выполнено",
     failed: "Ошибка",
   };
   return <span className={`badge ${colors[status] || "badge-secondary"}`}>{labels[status] || status}</span>;
@@ -107,7 +111,7 @@ export function ScansTable({
                 </td>
                 <td style={{ padding: "1rem" }}>{scanTypeLabel(scan.type)}</td>
                 <td style={{ padding: "1rem" }}>
-                  <ScanStatusBadge status={scan.status} />
+                  <ScanStatusBadge status={displayedScanStatus(scan)} />
                 </td>
                 <td style={{ padding: "1rem" }}>{scan.phase ?? "—"}</td>
                 <td style={{ padding: "1rem" }}>{new Date(scan.created_at).toLocaleString("ru-RU")}</td>

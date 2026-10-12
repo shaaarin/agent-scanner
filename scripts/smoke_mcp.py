@@ -85,12 +85,12 @@ def run_case(name, target, scanner_params, expect):
         deadline = time.monotonic() + 120
         while time.monotonic() < deadline:
             job = api(f"/scans/{job['id']}")
-            if job["status"] in {"completed", "failed"}:
+            if job["status"] in {"completed", "success", "partially_failed", "failed"}:
                 break
             time.sleep(1)
         result = json.loads(job.get("results") or "{}")
         findings = result.get("findings", [])
-        passed = job["status"] == "completed" and expect(result)
+        passed = job["status"] in {"completed", "success"} and expect(result)
         return dict(case=name, scan_id=job["id"], status=job["status"], passed=passed, findings=len(findings), checks=result.get("checks"), error=job.get("error"), url=f"http://localhost:4173/scans/{job['id']}")
     finally:
         if job and job.get("id"):

@@ -1,4 +1,21 @@
-import type { CodeScanSeverity, ScanType } from "./types";
+import type { CodeScanSeverity, Scan, ScanType } from "./types";
+
+export const TERMINAL_SCAN_STATUSES = ["completed", "success", "partially_failed", "failed"];
+
+// Historical MCP reports retain their stored status. Render their known
+// summary consistently with new scans without rewriting history in the DB.
+export function displayedScanStatus(scan: Pick<Scan, "type" | "status" | "results">): string {
+  if (scan.type === "mcp" && scan.status === "completed" && scan.results) {
+    try {
+      const summary = JSON.parse(scan.results)?.summary;
+      if (summary && typeof summary.completed === "number" && typeof summary.failed === "number") {
+        if (!summary.completed) return "failed";
+        return summary.failed || summary.pending ? "partially_failed" : "success";
+      }
+    } catch { /* Legacy report: keep its original status. */ }
+  }
+  return scan.status;
+}
 
 export const SCAN_TYPE_LABELS: Record<ScanType, string> = {
   deep_team: "[динамическое тестирование] DeepTeam",

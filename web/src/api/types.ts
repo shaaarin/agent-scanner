@@ -72,7 +72,7 @@ export interface AgentConfig {
 }
 
 export type ScanType = "deep_team" | "pyrit_scan" | "code_scan" | "ai_code_scan" | "indirect_injection" | "system_prompt_leak" | "mcp" | "agent_skills";
-export type ScanStatus = "pending" | "running" | "completed" | "failed";
+export type ScanStatus = "pending" | "running" | "completed" | "failed" | "partially_failed" | "success";
 export type AssetKind = "agent" | "mcp" | "skill";
 
 export interface Scan {
@@ -147,6 +147,7 @@ export interface SkillAsset {
 export type ScannerFieldType = "string" | "text" | "text_list" | "integer" | "boolean" | "enum" | "enum_multi" | "llm_model" | "json";
 
 export interface ScannerFieldOption {
+  reason?: string | null;
   value: string | number;
   label: string;
   available?: boolean;

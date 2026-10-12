@@ -222,6 +222,8 @@ class ScanStatus(str, Enum):
     PENDING = "pending"
     RUNNING = "running"
     COMPLETED = "completed"
+    SUCCESS = "success"
+    PARTIALLY_FAILED = "partially_failed"
     FAILED = "failed"
 
 

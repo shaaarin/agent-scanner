@@ -64,7 +64,7 @@ function EnumMultiField({
       {(field.options ?? []).map((option, index) => {
         const disabled = option.available === false;
         return (
-          <label key={optionKey(option, index)} style={{ display: "flex", gap: "0.5rem", alignItems: "flex-start", fontSize: 13, opacity: disabled ? 0.55 : 1 }}>
+          <label key={optionKey(option, index)} style={{ display: "flex", gap: "0.5rem", alignItems: "flex-start", fontSize: 13, color: disabled ? "var(--text-500)" : undefined }}>
             <input
               type="checkbox"
               checked={selected.includes(String(option.value))}
@@ -75,6 +75,9 @@ function EnumMultiField({
             <span>
               {option.label}
               {disabled && <span style={{ color: "var(--text-500)" }}> (недоступен)</span>}
+              {disabled && option.reason && (
+                <span style={{ display: "block", color: "var(--status-negative)", fontSize: 12 }}>{option.reason}</span>
+              )}
               {option.description && (
                 <span style={{ display: "block", color: "var(--text-500)", fontSize: 12 }}>{option.description}</span>
               )}

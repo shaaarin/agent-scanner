@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { Link, useParams, useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import type { Scan, AgentConfig, ScanResults, ScanLog, ScanReport, ScannerRegistration, CodeScanResults as CodeScanResultsData, IndirectInjectionResults as IndirectInjectionResultsData, SystemPromptLeakResults as SystemPromptLeakResultsData } from "../api/types";
-import { scanTypeLabel } from "../api/scanTypes";
+import { displayedScanStatus, scanTypeLabel, TERMINAL_SCAN_STATUSES } from "../api/scanTypes";
+import { ScanStatusBadge } from "../components/ScansTable";
 import { PageHeader } from "../components/PageHeader";
 import { CodeScanResults } from "../components/CodeScanResults";
 import { IndirectInjectionResults } from "../components/IndirectInjectionResults";
@@ -11,7 +12,6 @@ import { ScanReportView } from "../components/ScanReport";
 
 import { MCPResults, type MCPResultData } from "../components/MCPResults";
 
-const TERMINAL_STATUSES = ["completed", "failed"];
 const LOG_PAGE_SIZE = 500;
 
 // Журнал отдаётся страницами (не больше LOG_PAGE_SIZE строк за запрос) --
@@ -84,7 +84,7 @@ export function ScansDetail() {
   }, [id, scan?.results]);
 
   useEffect(() => {
-    if (!id || (scan && TERMINAL_STATUSES.includes(scan.status))) return;
+    if (!id || (scan && TERMINAL_SCAN_STATUSES.includes(scan.status))) return;
     const timer = setInterval(async () => {
       try {
         const fresh = await api.get<Scan>(`/scans/${id}`);
@@ -117,19 +117,7 @@ export function ScansDetail() {
   };
 
   const getStatusBadge = (status: string) => {
-    const colors: Record<string, string> = {
-      pending: "badge-secondary",
-      running: "badge-primary",
-      completed: "badge-success",
-      failed: "badge-danger",
-    };
-    const labels: Record<string, string> = {
-      pending: "Ожидает",
-      running: "Выполняется",
-      completed: "Завершено",
-      failed: "Ошибка",
-    };
-    return <span className={`badge ${colors[status] || "badge-secondary"}`}>{labels[status] || status}</span>;
+    return <ScanStatusBadge status={scan ? displayedScanStatus(scan) : status} />;
   };
 
   // Лейбл типа и фазы -- из реестра сканеров (GET /scanners).
@@ -258,7 +246,7 @@ export function ScansDetail() {
         </div>
       </div>
 
-      {(scan.status === "running" || scan.status === "completed" || scan.status === "failed") && (
+      {(scan.status === "running" || TERMINAL_SCAN_STATUSES.includes(scan.status)) && (
         <div className="card" style={{ marginBottom: "2rem" }}>
           <h3 style={{ marginBottom: "1rem" }}>Прогресс</h3>
 
@@ -268,7 +256,9 @@ export function ScansDetail() {
               const current = index === currentPhaseIndex;
               const color = scan.status === "failed" && current
                 ? "var(--danger)"
-                : done || (current && scan.status === "completed")
+                : scan.status === "partially_failed" && current
+                ? "var(--warning, #b7791f)"
+                : done || (current && ["completed", "success"].includes(scan.status))
                 ? "var(--success, #2e7d32)"
                 : current
                 ? "var(--primary, #1976d2)"
@@ -348,7 +338,7 @@ export function ScansDetail() {
         </div>
       )}
 
-      {scan.status === "failed" && (scan.error || results?.error) && (
+      {["failed", "partially_failed"].includes(scan.status) && (scan.error || results?.error) && (
         <div className="card" style={{ padding: "2rem", borderLeft: "0.3rem solid var(--danger)" }}>
           <h3 style={{ color: "var(--danger)", marginBottom: "1rem" }}>Ошибка</h3>
           <p style={{ color: "var(--text-700)" }}>{scan.error || results?.error}</p>
