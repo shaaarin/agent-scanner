@@ -21,6 +21,8 @@ from app.models import (
     ScanLogLevel,
     ScanStatus,
     ScanType,
+    SkillAsset,
+    SkillSource,
     TrafficEvent,
 )
 from app.schemas import MCPScanConfig, ScanCreate, ScanLogCreate, ScanRetry, ScanUpdate
@@ -127,6 +129,35 @@ def _retry_options(session: Session, scan: Scan) -> dict:
                        status=_retry_status(s), created_at=s.created_at,
                        started_at=s.started_at, finished_at=s.finished_at) for s in attempts],
     )
+
+
+def _compose_skill_config(asset: SkillAsset, scanner_params: dict) -> str:
+    """Собирает Scan.config для скана skills: параметры формы (движки и т.п.)
+    плюс снимок источника актива в `source` -- как цель MCP в `target`, чтобы
+    правка актива не переписывала уже созданный скан. Для git в снимок
+    попадает и токен (принятый техдолг MVP, как у MCP repository); байты zip
+    не копируются -- сканер берёт их из GET /skill-assets/{id}/content и
+    сверяет с `archive_sha256`."""
+    if asset.source == SkillSource.ZIP:
+        if not asset.archive:
+            raise HTTPException(status_code=422, detail="У skill-актива нет загруженного архива")
+        source = {
+            "kind": SkillSource.ZIP.value,
+            "asset_id": asset.id,
+            "archive_filename": asset.archive_filename,
+            "archive_sha256": asset.archive_sha256,
+        }
+    else:
+        if not (asset.git_repo_url or "").strip():
+            raise HTTPException(status_code=422, detail="У skill-актива не задан git-репозиторий")
+        source = {
+            "kind": SkillSource.REPOSITORY.value,
+            "git_repo_url": asset.git_repo_url,
+            "git_ref": asset.git_ref or "main",
+            "git_access_token": asset.git_access_token,
+        }
+    # Источник задаёт только актив: одноимённый ключ из запроса перекрывается.
+    return json.dumps({**scanner_params, "source": source}, ensure_ascii=False)
 
 
 @router.get("")
@@ -245,9 +276,9 @@ def create_scan(payload: ScanCreate) -> Scan:
         asset_model = {
             AssetKind.AGENT: AgentConfig,
             AssetKind.MCP: McpAsset,
-            AssetKind.SKILL: None,  # сущность есть, но сканеров для skills пока нет
+            AssetKind.SKILL: SkillAsset,
         }[payload.asset_kind]
-        asset = session.get(asset_model, payload.asset_id) if asset_model else None
+        asset = session.get(asset_model, payload.asset_id)
         if asset is None:
             raise HTTPException(status_code=422, detail=f"Актив («{payload.asset_kind}», id={payload.asset_id}) не найден")
 
@@ -270,6 +301,8 @@ def create_scan(payload: ScanCreate) -> Scan:
         config_json = "{}"
         if payload.asset_kind == AssetKind.MCP:
             config_json = _compose_mcp_config(asset.config, payload.config)
+        elif payload.asset_kind == AssetKind.SKILL:
+            config_json = _compose_skill_config(asset, payload.config or {})
         elif payload.asset_kind == AssetKind.AGENT:
             # Параметры сканера из динамической формы (поля его /schema).
             config_json = json.dumps(payload.config or {}, ensure_ascii=False)

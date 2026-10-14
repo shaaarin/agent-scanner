@@ -1,17 +1,18 @@
 """CRUD активов «Skill» (раздел «Активы», вкладка Skills).
 
 Источник -- git-репозиторий или zip-архив. Архив хранится BLOB-ом в PostgreSQL
-по образцу MCPArtifact (валидация проще: manifest.json не требуется, пока у
-skills нет сканера и формата). Сканера для вида `skill` в реестре нет --
-запуск сканов по таким активам control-api отклоняет.
+по образцу MCPArtifact (валидация проще: manifest.json не требуется). Сканирует
+актив `scanner-skills` (тип `agent_skills`): байты zip он забирает через
+`GET /skill-assets/{id}/content`, параметры git-клона -- из снимка источника в
+`Scan.config.source` (см. `app/api/scans.py`).
 """
 import hashlib
 import io
 import zipfile
 from pathlib import Path, PurePosixPath
-from urllib.parse import unquote
+from urllib.parse import quote, unquote
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile
 from sqlmodel import Session, select
 
 from app.db import get_session
@@ -118,6 +119,28 @@ def get_skill_asset(asset_id: int, session: Session = Depends(get_session)):
     if not asset:
         raise HTTPException(status_code=404, detail="Skill-актив не найден")
     return asset
+
+
+@router.get("/{asset_id}/content")
+def get_skill_asset_content(asset_id: int, session: Session = Depends(get_session)) -> Response:
+    """Байты zip-архива для scanner-skills (по образцу /mcp-artifacts/{id}/content).
+    У git-актива архива нет -- 409: такой актив сканер клонирует сам."""
+    asset = session.get(SkillAsset, asset_id)
+    if not asset:
+        raise HTTPException(status_code=404, detail="Skill-актив не найден")
+    if asset.source != SkillSource.ZIP:
+        raise HTTPException(status_code=409, detail="Источник skill-актива -- git-репозиторий, архива нет")
+    if not asset.archive:
+        raise HTTPException(status_code=404, detail="У skill-актива нет загруженного архива")
+    filename = _safe_filename(asset.archive_filename)
+    return Response(
+        content=asset.archive,
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f"attachment; filename=\"skills.zip\"; filename*=UTF-8''{quote(filename)}",
+            "X-Archive-SHA256": asset.archive_sha256 or "",
+        },
+    )
 
 
 @router.put("/{asset_id}", response_model=SkillAssetRead)

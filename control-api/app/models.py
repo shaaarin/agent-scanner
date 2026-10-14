@@ -184,8 +184,8 @@ class SkillSource(str, Enum):
 
 class SkillAsset(SQLModel, table=True):
     """Актив «Skill»: набор skills агента из git-репозитория или zip-архива.
-    Сканера для skills пока нет -- активы создаются заранее, реестр сканеров
-    не содержит типов для вида `skill`."""
+    Сканирует его `scanner-skills` (тип `agent_skills`); при создании скана
+    control-api копирует источник в `Scan.config.source`."""
 
     id: Optional[int] = Field(default=None, primary_key=True)
     name: str = Field(index=True, unique=True)
@@ -215,7 +215,7 @@ class ScanType(str, Enum):
     INDIRECT_INJECTION = "indirect_injection"  # scanner-indirect: косвенные инъекции в результаты инструментов
     SYSTEM_PROMPT_LEAK = "system_prompt_leak"  # scanner-sysleak: утечка системного промпта
     MCP = "mcp"  # scanner-mcp: metadata, dynamic and SAST
-    AGENT_SKILLS = "agent_skills"  # заглушка в UI, сканера пока нет
+    AGENT_SKILLS = "agent_skills"  # scanner-skills: статический анализ Agent Skills (SKILL.md)
 
 
 class ScanStatus(str, Enum):
@@ -283,7 +283,9 @@ class Scan(SQLModel, table=True):
     #                        "repeats": int, "max_trials": int}
     # - MCP: {"target": {"kind": "remote|repository|bundle", ...},
     #         "scanner_ids": [...], "timeout_seconds": int}
-    # - AGENT_SKILLS: {} (placeholder)
+    # - AGENT_SKILLS: {"engines": [str], ...поля /schema scanner-skills,
+    #                  "source": {"kind": "zip", "asset_id", "archive_filename", "archive_sha256"}
+    #                          | {"kind": "repository", "git_repo_url", "git_ref", "git_access_token"}}
     config: str = Field(default="{}", sa_column=Column(JSON))
     # JSON results, shape depends on type:
     # - DEEP_TEAM: {"vulnerability_results": [...], "overall_score": float}

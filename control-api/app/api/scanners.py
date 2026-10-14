@@ -14,7 +14,7 @@ from fastapi import APIRouter, HTTPException
 from sqlmodel import Session, select
 
 from app.db import engine
-from app.models import AgentConfig, AssetKind, LLMModel, McpAsset
+from app.models import AgentConfig, AssetKind, LLMModel, McpAsset, SkillAsset
 from app.scanner_registry import REGISTRY, ScannerRegistration
 
 router = APIRouter(prefix="/scanners", tags=["scanners"])
@@ -82,6 +82,9 @@ def _asset_capabilities(session: Session, kind: AssetKind, asset) -> set[str]:
             # Настроенный деплой -- обещание живого сервиса для динамики.
             if asset.deploy:
                 capabilities.add("live")
+    elif kind == AssetKind.SKILL:
+        # Skill -- это всегда файлы (репозиторий или zip), живого сервиса нет.
+        capabilities.add("code")
     return capabilities
 
 
@@ -117,7 +120,7 @@ def list_scanners(
     capabilities: Optional[set[str]] = None
     mcp_target_kind: Optional[str] = None
     if asset_kind is not None and asset_id is not None:
-        model = {AssetKind.AGENT: AgentConfig, AssetKind.MCP: McpAsset}.get(asset_kind)
+        model = {AssetKind.AGENT: AgentConfig, AssetKind.MCP: McpAsset, AssetKind.SKILL: SkillAsset}.get(asset_kind)
         with Session(engine) as session:
             asset = session.get(model, asset_id) if model else None
             if not asset:
