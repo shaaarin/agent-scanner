@@ -1,0 +1,162 @@
+{
+ "cisco-test/malicious/ascii-smuggling": {
+  "cisco": "CRITICAL",
+  "skillspector": "HIGH"
+ },
+ "cisco-test/malicious/exfiltrator": {
+  "cisco": "CRITICAL",
+  "skillspector": "CRITICAL"
+ },
+ "cisco-test/malicious/flowise-cve-2025-59528": {
+  "cisco": "INFO",
+  "skillspector": null
+ },
+ "cisco-test/malicious/mcp-atlassian-cve-2026-27825": {
+  "cisco": "INFO",
+  "skillspector": null
+ },
+ "cisco-test/malicious/mcpwn-cve-2026-33032": {
+  "cisco": "INFO",
+  "skillspector": null
+ },
+ "cisco-test/malicious/prompt-injection": {
+  "cisco": "CRITICAL",
+  "skillspector": "HIGH"
+ },
+ "cisco-test/safe/atr-benign-control": {
+  "cisco": "MEDIUM",
+  "skillspector": null
+ },
+ "cisco-test/safe/simple-formatter": {
+  "cisco": "LOW",
+  "skillspector": null
+ },
+ "cisco/autonomy-abuse/no-confirmation": {
+  "cisco": "MEDIUM",
+  "skillspector": "MEDIUM"
+ },
+ "cisco/backdoor/magic-string-trigger": {
+  "cisco": "CRITICAL",
+  "skillspector": "MEDIUM"
+ },
+ "cisco/behavioral-analysis/multi-file-exfiltration": {
+  "cisco": "CRITICAL",
+  "skillspector": null
+ },
+ "cisco/command-injection/eval-execution": {
+  "cisco": "CRITICAL",
+  "skillspector": "MEDIUM"
+ },
+ "cisco/data-exfiltration/config-tunnel-exfil": {
+  "cisco": "HIGH",
+  "skillspector": null
+ },
+ "cisco/data-exfiltration/environment-secrets": {
+  "cisco": "HIGH",
+  "skillspector": "HIGH"
+ },
+ "cisco/hardcoded-secrets/stripe-key": {
+  "cisco": "CRITICAL",
+  "skillspector": null
+ },
+ "cisco/harmful-content/explicit-ransomware-request": {
+  "cisco": "HIGH",
+  "skillspector": null
+ },
+ "cisco/malware/ransomware-chain": {
+  "cisco": "HIGH",
+  "skillspector": "MEDIUM"
+ },
+ "cisco/obfuscation/base64-payload": {
+  "cisco": "CRITICAL",
+  "skillspector": "MEDIUM"
+ },
+ "cisco/path-traversal/file-reader": {
+  "cisco": "CRITICAL",
+  "skillspector": null
+ },
+ "cisco/policy-violation/missing-license": {
+  "cisco": "INFO",
+  "skillspector": null
+ },
+ "cisco/prompt-injection/jailbreak-override": {
+  "cisco": "HIGH",
+  "skillspector": null
+ },
+ "cisco/resource-exhaustion/infinite-loop": {
+  "cisco": "HIGH",
+  "skillspector": null
+ },
+ "cisco/safe-skills-2/file-validator": {
+  "cisco": null,
+  "skillspector": null
+ },
+ "cisco/safe-skills/simple-math": {
+  "cisco": null,
+  "skillspector": null
+ },
+ "cisco/skill-discovery-abuse/keyword-stuffing": {
+  "cisco": "MEDIUM",
+  "skillspector": null
+ },
+ "cisco/social-engineering/vague-description": {
+  "cisco": "LOW",
+  "skillspector": "HIGH"
+ },
+ "cisco/sql-injection/database-query": {
+  "cisco": "CRITICAL",
+  "skillspector": null
+ },
+ "cisco/supply-chain-attack/unpinned-dependency": {
+  "cisco": "MEDIUM",
+  "skillspector": "HIGH"
+ },
+ "cisco/tool-chaining-abuse/attacker-forwarding": {
+  "cisco": "MEDIUM",
+  "skillspector": null
+ },
+ "cisco/transitive-trust-abuse/external-instructions": {
+  "cisco": "MEDIUM",
+  "skillspector": null
+ },
+ "cisco/unauthorized-tool-use/remote-package-source": {
+  "cisco": "HIGH",
+  "skillspector": "HIGH"
+ },
+ "cisco/unicode-steganography/encoded-tag": {
+  "cisco": "MEDIUM",
+  "skillspector": null
+ },
+ "marker/bang-injection": {
+  "cisco": "INFO",
+  "skillspector": null
+ },
+ "marker/benign-plain": {
+  "cisco": "INFO",
+  "skillspector": null
+ },
+ "marker/hooks-command": {
+  "cisco": "MEDIUM",
+  "skillspector": null
+ },
+ "marker/shell-persistence": {
+  "cisco": "INFO",
+  "skillspector": "HIGH"
+ },
+ "skillspector/malicious_skill": {
+  "cisco": "CRITICAL",
+  "skillspector": "CRITICAL"
+ },
+ "skillspector/pe3_bare_keyring": {
+  "cisco": "INFO",
+  "skillspector": null
+ },
+ "skillspector/safe_skill": {
+  "cisco": "INFO",
+  "skillspector": null
+ },
+ "skillspector/tp4_markdown_fenced_code": {
+  "cisco": "MEDIUM",
+  "skillspector": "MEDIUM"
+ }
+}
