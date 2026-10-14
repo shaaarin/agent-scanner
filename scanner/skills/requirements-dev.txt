@@ -1,0 +1,3 @@
+# Только для тестов сервиса (tests/), в образ scanner-skills не попадает.
+-r requirements.txt
+pytest>=8

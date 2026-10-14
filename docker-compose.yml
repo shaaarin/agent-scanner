@@ -39,6 +39,7 @@ services:
       SCANNER_SEMGREP_URL: http://scanner-semgrep:8000
       SCANNER_INDIRECT_URL: http://scanner-indirect:8000
       SCANNER_SYSLEAK_URL: http://scanner-sysleak:8000
+      SCANNER_SKILLS_URL: http://scanner-skills:8000
       LIBRARY_DIR: /library
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
@@ -146,6 +147,33 @@ services:
     security_opt: [no-new-privileges:true]
     mem_limit: 2g
     cpus: 2
+
+  # Анализ Agent Skills (SKILL.md): движки Cisco skill-scanner и NVIDIA
+  # SkillSpector как подпроцессы в одном контейнере (D-43), вердикт считает
+  # сам сервис. Без kind/launcher. Hardening -- как у воркеров scanner-mcp (D-41).
+  scanner-skills:
+    build: ./scanner/skills
+    environment:
+      CONTROL_API_URL: http://control-api:8000
+      SCAN_MAX_CONCURRENT: "2"
+      SCAN_ENGINE_TIMEOUT: "300"
+      SCAN_TOTAL_TIMEOUT: "1800"
+      SCAN_MAX_SKILLS: "50"
+    depends_on:
+      control-api:
+        condition: service_healthy
+    init: true
+    restart: unless-stopped
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 3g
+    cpus: 2
+    pids_limit: 256
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
 
   # Косвенные инъекции: поднимает агента через launcher, отправляет ему
   # легитимную задачу и через прокси подкладывает инъекцию в результаты его
