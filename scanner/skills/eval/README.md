@@ -29,6 +29,17 @@ export CISCO_BIN=/путь/к/skill-scanner SKILLSPECTOR_BIN=/путь/к/skills
 .venv/bin/python -m pytest                        # тесты (FULL_EVAL=1 добавляет полный прогон ~3 мин)
 ```
 
+Эталонная среда — образ `scanner-skills` (те же версии и lock-файлы, что в продукте):
+
+```bash
+docker compose build scanner-skills
+docker run --rm -v "$PWD:/eval" -w /eval --entrypoint sh agent-scanner-scanner-skills \
+  -c 'python run_eval.py --cisco-bin $CISCO_BIN --skillspector-bin $SKILLSPECTOR_BIN'
+```
+
+Severity SkillSpector по зависимостям зависит от доступности OSV.dev: без сети он берёт
+встроенные данные и оценивает строже (R-32 в `SKILLSS.md`).
+
 `manifest.yaml` генерируется `build_manifest.py` (метки Cisco берутся из их `_expected.json`).
 Новый каталог в `corpus/` без записи в `EXPLICIT` генератор не пропустит. `baseline.json`
 хранит максимальную severity по каждому кейсу и движку; движки запинены, поэтому любой
