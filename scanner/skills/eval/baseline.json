@@ -131,6 +131,10 @@
   "cisco": "INFO",
   "skillspector": null
  },
+ "marker/bang-network": {
+  "cisco": "HIGH",
+  "skillspector": "HIGH"
+ },
  "marker/benign-plain": {
   "cisco": "INFO",
   "skillspector": null
@@ -140,7 +144,7 @@
   "skillspector": null
  },
  "marker/shell-persistence": {
-  "cisco": "INFO",
+  "cisco": "HIGH",
   "skillspector": "HIGH"
  },
  "skillspector/malicious_skill": {

@@ -28,3 +28,14 @@ def skillspector_bin():
     if not b:
         pytest.skip("skillspector не найден (задайте SKILLSPECTOR_BIN)")
     return b
+
+
+@pytest.fixture(scope="session")
+def rules_dir():
+    """Свои правила с собранным паком Cisco ($SKILLS_RULES_DIR, в образе -- /srv/rules)."""
+    from engines import cisco_pack, yara_dir
+
+    value = os.environ.get("SKILLS_RULES_DIR")
+    if not (value and cisco_pack(Path(value)) and yara_dir(Path(value))):
+        pytest.skip("свои правила не собраны (задайте SKILLS_RULES_DIR)")
+    return Path(value)

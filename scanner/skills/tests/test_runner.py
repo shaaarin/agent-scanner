@@ -1,6 +1,6 @@
 """Оркестрация скана: фазы, ошибки, очередь, общий таймаут, прерванные сканы
-(D-05, D-27, D-33, D-37, D-46). Этапы 5-8 ещё не реализованы, поэтому путь
-до completed проверяется с подставленными этапами."""
+(D-05, D-27, D-33, D-37, D-46). Этапы подменяются, чтобы проверять саму
+оркестрацию; этапы целиком -- в test_sources/test_analysis/test_report."""
 import json
 import threading
 import time
@@ -139,7 +139,7 @@ def test_completed_path(api, ok_stages):
     ]
     # Последняя строка журнала пишется до смены статуса на completed.
     last_two = api.events[-2:]
-    assert last_two[0][0] == "log" and last_two[0][2]["message"] == "Анализ навыков завершён"
+    assert last_two[0][0] == "log" and last_two[0][2]["message"].startswith("Анализ навыков завершён, вердикт pass")
     assert last_two[1][0] == "patch" and last_two[1][2]["status"] == "completed"
     # Токен не попадает в журнал.
     assert not any("secret-token" in m for m in api.messages(2))

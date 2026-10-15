@@ -1,21 +1,15 @@
-"""Этапы скана, которые наполняются следующими подзадачами SKILLSS.md §4:
+"""Этапы скана, которые вызывает runner:
 
-    fetch_sources -- подзадача 5 (готово, app/sources.py): zip из control-api
-                     или git-клон, безопасная распаковка, поиск SKILL.md;
-    analyze       -- подзадача 6 (готово, app/analysis.py + app/engines/):
-                     движки по каждому скиллу; подзадача 7 -- свои правила
-                     и мини-проверка frontmatter;
-    build_results -- подзадача 8: единый отчёт и вердикт (§2.7).
+    fetch_sources -- app/sources.py: zip из control-api или git-клон,
+                     безопасная распаковка, поиск SKILL.md (D-49);
+    analyze       -- app/analysis.py + app/engines/ + app/manifest_check.py:
+                     движки и проверка frontmatter по каждому скиллу (D-50, D-51);
+    build_results -- app/report.py: единый отчёт и вердикт (§2.7, D-52).
 
-Пока этап не реализован, он честно останавливает скан с понятным текстом:
-никаких «пустых» результатов, которые выглядели бы как «чисто».
+Отдельный модуль -- точка подмены этапов в тестах runner'а.
 """
-from app import analysis, sources
+from app import analysis, report, sources
 from app.context import ScanContext
-
-
-class StageNotImplemented(RuntimeError):
-    """Этап ещё не реализован в этой версии сканера."""
 
 
 def fetch_sources(ctx: ScanContext) -> None:
@@ -27,4 +21,4 @@ def analyze(ctx: ScanContext) -> None:
 
 
 def build_results(ctx: ScanContext) -> dict:
-    raise StageNotImplemented("Сборка отчёта ещё не реализована в этой версии scanner-skills")
+    return report.build_results(ctx)

@@ -9,9 +9,7 @@
 """
 from pathlib import Path
 
-import yaml
-
-from app import archive, control_client, repo
+from app import archive, control_client, manifest_check, repo
 from app.context import ScanContext
 
 SKILL_FILE = "SKILL.md"
@@ -22,23 +20,10 @@ SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv"}
 def frontmatter_name(skill_md: Path) -> str | None:
     """Поле `name` из YAML-frontmatter SKILL.md или None. Только безопасный
     загрузчик и ограниченный размер: файл недоверенный."""
-    try:
-        head = skill_md.open("rb").read(FRONTMATTER_MAX_BYTES).decode("utf-8", errors="replace")
-    except OSError:
-        return None
-    lines = head.splitlines()
-    if not lines or lines[0].strip() != "---":
-        return None
-    try:
-        end = next(i for i, line in enumerate(lines[1:], start=1) if line.strip() == "---")
-    except StopIteration:
-        return None
-    try:
-        data = yaml.safe_load("\n".join(lines[1:end]))
-    except yaml.YAMLError:
-        return None
-    if isinstance(data, dict) and isinstance(data.get("name"), str) and data["name"].strip():
-        return data["name"].strip()[:200]
+    data = manifest_check.read_frontmatter(skill_md, max_bytes=FRONTMATTER_MAX_BYTES).data or {}
+    name = data.get("name")
+    if isinstance(name, str) and name.strip():
+        return name.strip()[:200]
     return None
 
 

@@ -163,7 +163,7 @@ def _run_claimed(scan_id: int) -> None:
         acquired = True
         _run(scan_id)
     except Exception as exc:  # noqa: BLE001 -- падение одного скана не должно ронять поток
-        # RuntimeError (в т.ч. ScanTimeout, StageNotImplemented) -- наши понятные
+        # RuntimeError (в т.ч. ScanTimeout) -- наши понятные
         # сообщения; остальное (сеть, control-api) -- с типом для диагностики.
         message = str(exc) if isinstance(exc, RuntimeError) else f"{type(exc).__name__}: {exc}"
         try:
@@ -257,7 +257,7 @@ def _run(scan_id: int) -> None:
 
             _set_phase(scan_id, "Сохранение результатов")
             payload = stages.build_results(ctx)
-            final_message = "Анализ навыков завершён"
+            final_message = report.final_message(payload)
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
 

@@ -5,6 +5,9 @@
 запуска -- min(SCAN_ENGINE_TIMEOUT, остаток дедлайна), между скиллами
 проверяется общий дедлайн (D-33).
 
+После движков по каждому скиллу всегда выполняется мини-проверка
+frontmatter (`manifest_check`, D-31): в процессе сервиса, без подпроцесса.
+
 Движок упал по скиллу -- это результат прогона, а не ошибка скана: отчёт
 будет `complete: false` (D-23). Скан падает, только если не отработал ни
 один запуск ни одного движка. Находки собираются в `ctx.engine_runs`,
@@ -12,7 +15,7 @@
 """
 from concurrent.futures import ThreadPoolExecutor
 
-from app import engines
+from app import engines, manifest_check
 from app.context import ScanContext
 from app.engines.base import EngineRun, SEVERITIES
 from app.engines.skillspector import OSV_WARNING
@@ -29,12 +32,16 @@ def _plural(n: int, one: str, few: str, many: str) -> str:
     return many
 
 
+def label(engine: str) -> str:
+    return manifest_check.LABEL if engine == manifest_check.ENGINE else engines.get(engine).label
+
+
 def describe_run(run: EngineRun) -> str:
-    label = engines.get(run.engine).label
+    label_text = label(run.engine)
     if not run.ok:
-        return f"{label} не отработал: {run.error}"
+        return f"{label_text} не отработал: {run.error}"
     count = len(run.findings)
-    text = f"{label} — {count} {_plural(count, 'находка', 'находки', 'находок')}"
+    text = f"{label_text} — {count} {_plural(count, 'находка', 'находки', 'находок')}"
     if run.findings:
         worst = min(run.findings, key=lambda f: SEVERITIES.index(f.severity)).severity
         text += f", макс. {worst}"
@@ -50,7 +57,10 @@ def _run_skill(ctx: ScanContext, index: int, skill: dict) -> dict[str, EngineRun
 
     with ThreadPoolExecutor(max_workers=len(ctx.engines), thread_name_prefix=f"skills-{ctx.scan_id}") as pool:
         results = list(pool.map(one, ctx.engines))
-    return {run.engine: run for run in results}
+    runs = {run.engine: run for run in results}
+    # Проверка frontmatter -- всегда, независимо от выбора движков (D-31, D-47).
+    runs[manifest_check.ENGINE] = manifest_check.run(skill["dir"])
+    return runs
 
 
 def analyze(ctx: ScanContext) -> None:
@@ -68,19 +78,21 @@ def analyze(ctx: ScanContext) -> None:
             level="error" if failed else "info",
         )
         for run in runs.values():
-            label = engines.get(run.engine).label
+            run_label = label(run.engine)
             for warning in run.warnings:
                 if warning in SCAN_WIDE_WARNINGS:
                     if warning not in logged_warnings:
                         logged_warnings.add(warning)
-                        ctx.log(f"{label}: {warning}")
+                        ctx.log(f"{run_label}: {warning}")
                 else:
-                    ctx.log(f"[{index}/{total}] {skill['name']}: {label}: {warning}")
+                    ctx.log(f"[{index}/{total}] {skill['name']}: {run_label}: {warning}")
     ctx.deadline.check()
 
     all_runs = [run for runs in ctx.engine_runs.values() for run in runs.values()]
-    if not any(run.ok for run in all_runs):
-        errors = sorted({f"{engines.get(r.engine).label}: {r.error}" for r in all_runs})
+    # Скан держится на движках: одна проверка frontmatter -- не результат (D-23).
+    engine_runs = [run for run in all_runs if run.engine != manifest_check.ENGINE]
+    if not any(run.ok for run in engine_runs):
+        errors = sorted({f"{label(r.engine)}: {r.error}" for r in engine_runs})
         raise RuntimeError("Ни один движок не отработал: " + "; ".join(errors[:4]))
     for name in ctx.engines:
         broken = sum(1 for runs in ctx.engine_runs.values() if not runs[name].ok)

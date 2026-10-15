@@ -51,7 +51,7 @@ def test_all_skills_all_engines(tmp_path, both_ok):
     analysis.analyze(ctx)
     assert list(ctx.engine_runs) == ["alpha", "beta"]
     for runs in ctx.engine_runs.values():
-        assert list(runs) == ["cisco", "skillspector"]
+        assert list(runs) == ["cisco", "skillspector", "manifest"]
         assert all(run.ok for run in runs.values())
         assert runs["cisco"].findings[0].rule_id == "DATA_EXFIL_SENSITIVE_FILES"
     assert logs[0][0] == "info"
@@ -68,7 +68,7 @@ def test_only_selected_engine(tmp_path, monkeypatch):
     monkeypatch.setenv("CISCO_BIN", str(tmp_path / "must-not-run"))
     ctx, _ = _ctx(tmp_path, names=("alpha",), engines=("skillspector",))
     analysis.analyze(ctx)
-    assert list(ctx.engine_runs["alpha"]) == ["skillspector"]
+    assert list(ctx.engine_runs["alpha"]) == ["skillspector", "manifest"]
 
 
 def test_engines_run_in_parallel(tmp_path, monkeypatch):
@@ -177,7 +177,7 @@ def test_plural(n, word):
 # --- через runner ---------------------------------------------------------------------------
 
 
-def test_runner_reaches_report_stage(api, tmp_path, monkeypatch):
+def test_runner_completes_with_report(api, tmp_path, monkeypatch):
     install_fixture(tmp_path, monkeypatch, "cisco", "cisco-environment-secrets.json")
     install_fixture(tmp_path, monkeypatch, "skillspector", "skillspector-environment-secrets.json")
     content = make_zip({"pack/a/SKILL.md": skill_md("alpha")})
@@ -185,13 +185,16 @@ def test_runner_reaches_report_stage(api, tmp_path, monkeypatch):
     api.add_scan(80, config=json.dumps({"source": zip_source(content)}))
     runner.run_scan(80)
     scan = api.scans[80]
-    # Отчёт и вердикт -- подзадача 8: до неё скан честно падает на сохранении.
-    assert scan["status"] == "failed"
-    assert scan["error"] == "Сборка отчёта ещё не реализована в этой версии scanner-skills"
+    assert scan["status"] == "completed", scan["error"]
     assert api.phases(80) == [
-        "Инициализация", "Получение исходников", "Статический анализ", "Сохранение результатов", "Ошибка"
+        "Инициализация", "Получение исходников", "Статический анализ", "Сохранение результатов", "Завершено"
     ]
+    results = json.loads(scan["results"])
+    # high у обоих движков, своих сигналов нет -- review (D-52).
+    assert results["verdict"] == "review" and results["complete"] is True
+    assert [s["name"] for s in results["skills"]] == ["alpha"]
     assert any(m.startswith("[1/1] alpha (pack/a): Cisco skill-scanner — 1 находка") for m in api.messages(80))
+    assert api.messages(80)[-1] == "Анализ навыков завершён, вердикт review (нужна ручная проверка); скиллов — review: 1"
 
 
 def test_runner_all_engines_failed(api, tmp_path, monkeypatch):

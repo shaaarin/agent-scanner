@@ -162,3 +162,43 @@ def api(monkeypatch):
     server.shutdown()
     assert not fake.rejected_logs, f"control-api отверг строки журнала: {fake.rejected_logs}"
     client.close()
+
+
+@pytest.fixture(scope="session")
+def built_rules(tmp_path_factory):
+    """Свои правила как в образе: rules/yara + пак Cisco, собранный
+    rules/build_pack.py (D-35)."""
+    import shutil
+    import sys
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1] / "rules"
+    sys.path.insert(0, str(root))
+    import build_pack
+
+    target = tmp_path_factory.mktemp("rules")
+    shutil.copytree(root / "yara", target / "yara")
+    files, rules = build_pack.load(target / "yara")
+    build_pack.write_pack(files, rules, target / "cisco-pack")
+    return target
+
+
+@pytest.fixture(autouse=True)
+def rules_env(built_rules, monkeypatch):
+    monkeypatch.setenv("SKILLS_RULES_DIR", str(built_rules))
+    return built_rules
+
+
+@pytest.fixture(scope="session")
+def image():
+    """Собранный образ scanner-skills (`SKILLS_IMAGE`); без docker/образа -- skip."""
+    import os
+    import shutil
+    import subprocess
+
+    name = os.environ.get("SKILLS_IMAGE", "agent-scanner-scanner-skills")
+    if not shutil.which("docker"):
+        pytest.skip("docker не найден")
+    if subprocess.run(["docker", "image", "inspect", name], capture_output=True).returncode != 0:
+        pytest.skip(f"образ {name} не собран (docker compose build scanner-skills)")
+    return name

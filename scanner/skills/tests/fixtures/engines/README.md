@@ -2,3 +2,5 @@
 `--no-llm`), снятые 2026-10-15 на кейсах корпуса `eval/corpus/` (фикстуры Cisco, Apache-2.0,
 см. `eval/NOTICE.md`). `*-offline.*` — тот же кейс в контейнере с `--network none`
 (OSV.dev недоступен, R-32). Тесты адаптеров разбирают их без запуска движков.
+`*-shell-persistence-rules.json` — кейс `marker/shell-persistence` со своими правилами
+(`--trusted-rule-pack /srv/rules/cisco-pack`, `--yara-rules-dir /srv/rules/yara`), подзадача 7.

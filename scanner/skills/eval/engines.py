@@ -96,20 +96,43 @@ def _run(cmd: list[str], out_file: Path, timeout: int) -> tuple[dict | None, str
         return None, f"bad json: {exc}"
 
 
-def run_cisco(skill_dir: Path, binary: str = "skill-scanner", timeout: int = 300) -> EngineResult:
+def cisco_pack(rules_dir: Path | None) -> Path | None:
+    """Пак своих правил для Cisco (rules/cisco-pack, собирается rules/build_pack.py)."""
+    pack = Path(rules_dir) / "cisco-pack" if rules_dir else None
+    return pack if pack and (pack / "pack.yaml").is_file() else None
+
+
+def yara_dir(rules_dir: Path | None) -> Path | None:
+    path = Path(rules_dir) / "yara" if rules_dir else None
+    return path if path and any(path.glob("*.yara")) else None
+
+
+def run_cisco(
+    skill_dir: Path, binary: str = "skill-scanner", timeout: int = 300, rules_dir: Path | None = None
+) -> EngineResult:
+    """С `rules_dir` -- как в продукте: + свои правила через --trusted-rule-pack (D-18)."""
     with tempfile.TemporaryDirectory() as tmp:
         out = Path(tmp) / "out.json"
-        cmd = [binary, "scan", str(skill_dir), "--use-behavioral", "--format", "json", "--output", str(out)]
+        cmd = [binary, "scan", str(skill_dir), "--use-behavioral"]
+        if pack := cisco_pack(rules_dir):
+            cmd += ["--trusted-rule-pack", str(pack)]
+        cmd += ["--format", "json", "--output", str(out)]
         data, err = _run(cmd, out, timeout)
     if data is None:
         return EngineResult("cisco", False, error=err)
     return normalize_cisco(data)
 
 
-def run_skillspector(skill_dir: Path, binary: str = "skillspector", timeout: int = 300) -> EngineResult:
+def run_skillspector(
+    skill_dir: Path, binary: str = "skillspector", timeout: int = 300, rules_dir: Path | None = None
+) -> EngineResult:
+    """С `rules_dir` -- + свои правила через --yara-rules-dir (D-18)."""
     with tempfile.TemporaryDirectory() as tmp:
         out = Path(tmp) / "out.json"
-        cmd = [binary, "scan", str(skill_dir), "--no-llm", "-f", "json", "-o", str(out)]
+        cmd = [binary, "scan", str(skill_dir), "--no-llm"]
+        if rules := yara_dir(rules_dir):
+            cmd += ["--yara-rules-dir", str(rules)]
+        cmd += ["-f", "json", "-o", str(out)]
         data, err = _run(cmd, out, timeout)
     if data is None:
         return EngineResult("skillspector", False, error=err)

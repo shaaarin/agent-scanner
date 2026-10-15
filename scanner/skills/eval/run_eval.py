@@ -5,18 +5,20 @@
       --skillspector-bin /opt/engines/skillspector/bin/skillspector
   python run_eval.py ... --update-baseline     # перезаписать baseline.json
   python run_eval.py ... --with-external       # + anthropics/skills (после fetch_external.sh)
+  python run_eval.py ... --rules-dir ../rules  # свои правила (в образе берутся из $SKILLS_RULES_DIR)
 Результаты: results/results.json и results/report.md (каталог в .gitignore).
 """
 from __future__ import annotations
 
 import argparse
 import json
+import os
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from corpus import EVAL_DIR, Case, external_cases, load_manifest
-from engines import EngineResult, run_cisco, run_skillspector
+from engines import EngineResult, cisco_pack, run_cisco, run_skillspector, yara_dir
 
 ENGINES = ("cisco", "skillspector")
 BASELINE = EVAL_DIR / "baseline.json"
@@ -34,16 +36,18 @@ def result_row(res: EngineResult) -> dict:
     }
 
 
-def run_case(case: Case, cisco_bin: str, ss_bin: str, timeout: int) -> dict:
+def run_case(case: Case, cisco_bin: str, ss_bin: str, timeout: int, rules_dir: Path | None = None) -> dict:
     row = {"label": case.label, "technique": case.technique, "source": case.source}
-    row["cisco"] = result_row(run_cisco(case.path, cisco_bin, timeout))
-    row["skillspector"] = result_row(run_skillspector(case.path, ss_bin, timeout))
+    row["cisco"] = result_row(run_cisco(case.path, cisco_bin, timeout, rules_dir))
+    row["skillspector"] = result_row(run_skillspector(case.path, ss_bin, timeout, rules_dir))
     return row
 
 
-def run_all(cases: list[Case], cisco_bin: str, ss_bin: str, timeout: int = 300, workers: int = 2) -> dict:
+def run_all(
+    cases: list[Case], cisco_bin: str, ss_bin: str, timeout: int = 300, workers: int = 2, rules_dir: Path | None = None
+) -> dict:
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        rows = list(pool.map(lambda c: run_case(c, cisco_bin, ss_bin, timeout), cases))
+        rows = list(pool.map(lambda c: run_case(c, cisco_bin, ss_bin, timeout, rules_dir), cases))
     return {c.id: r for c, r in zip(cases, rows)}
 
 
@@ -142,12 +146,20 @@ def main() -> int:
     ap.add_argument("--timeout", type=int, default=300)
     ap.add_argument("--with-external", action="store_true")
     ap.add_argument("--update-baseline", action="store_true")
+    ap.add_argument(
+        "--rules-dir",
+        type=Path,
+        default=os.environ.get("SKILLS_RULES_DIR"),
+        help="свои правила (rules/ с собранным cisco-pack); в образе -- $SKILLS_RULES_DIR. baseline снят с ними",
+    )
     args = ap.parse_args()
+    if not (cisco_pack(args.rules_dir) and yara_dir(args.rules_dir)):
+        print("ВНИМАНИЕ: свои правила не подключены (--rules-dir) -- результат не сравним с baseline")
 
     cases = load_manifest()
     if args.with_external:
         cases += external_cases()
-    results = run_all(cases, args.cisco_bin, args.skillspector_bin, args.timeout)
+    results = run_all(cases, args.cisco_bin, args.skillspector_bin, args.timeout, rules_dir=args.rules_dir)
 
     RESULTS_DIR.mkdir(exist_ok=True)
     (RESULTS_DIR / "results.json").write_text(json.dumps(results, ensure_ascii=False, indent=1), encoding="utf-8")

@@ -165,6 +165,11 @@ cases:
   label: malicious
   technique: claude-code-bang-injection
   source: own marker fixture
+- id: marker/bang-network
+  path: corpus/marker/bang-network
+  label: malicious
+  technique: claude-code-bang-injection
+  source: own marker fixture
 - id: marker/benign-plain
   path: corpus/marker/benign-plain
   label: benign

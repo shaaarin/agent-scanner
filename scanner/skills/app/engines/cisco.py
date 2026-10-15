@@ -15,8 +15,11 @@ from app.engines.base import (
     clip,
     normalize_severity,
     relative_file,
+    rules_dir,
     to_int,
 )
+
+GENERIC_YARA_TITLE = "detected by YARA"
 
 
 class CiscoEngine(Engine):
@@ -26,13 +29,21 @@ class CiscoEngine(Engine):
     binary_env = "CISCO_BIN"
     default_binary = "/opt/engines/cisco/bin/skill-scanner"
 
+    @staticmethod
+    def rule_pack() -> Path:
+        return rules_dir() / "cisco-pack"
+
     def command(self, skill_dir: Path, output: Path) -> list[str]:
-        return [
-            self.binary, "scan", str(skill_dir),
-            "--use-behavioral",
-            "--format", "json",
-            "--output", str(output),
-        ]
+        cmd = [self.binary, "scan", str(skill_dir), "--use-behavioral"]
+        if (self.rule_pack() / "pack.yaml").is_file():
+            # Не --custom-rules: тот заменяет встроенные YARA-правила Cisco (D-18).
+            cmd += ["--trusted-rule-pack", str(self.rule_pack())]
+        return cmd + ["--format", "json", "--output", str(output)]
+
+    def missing_rules(self) -> str | None:
+        if (self.rule_pack() / "pack.yaml").is_file():
+            return None
+        return "свои YARA-правила не подключены: нет пака rules/cisco-pack (собирается при сборке образа)"
 
     def parse(self, data: dict, skill_dir: Path, run: EngineRun) -> None:
         if "findings" not in data or not isinstance(data["findings"], list):
@@ -52,9 +63,19 @@ class CiscoEngine(Engine):
                     category=clip(item.get("category"), 100),
                     file=relative_file(item.get("file_path"), skill_dir),
                     line=to_int(item.get("line_number")),
-                    title=clip(item.get("title")) or str(item.get("rule_id") or "Находка Cisco"),
+                    title=_title(item),
                     finding=clip(item.get("description")),
                     fix=clip(item.get("remediation")),
                     snippet=clip(item.get("snippet"), MAX_SNIPPET),
                 )
             )
+
+
+def _title(item: dict) -> str:
+    """У YARA-находок Cisco заголовок общий («… detected by YARA»), а смысл --
+    в описании «<meta.description>: <совпадение>»."""
+    title = clip(item.get("title"))
+    description = str(item.get("description") or "")
+    if (not title or GENERIC_YARA_TITLE in title) and str(item.get("rule_id", "")).startswith("YARA_") and description:
+        return clip(description.split(": ", 1)[0], 300)
+    return title or str(item.get("rule_id") or "Находка Cisco")

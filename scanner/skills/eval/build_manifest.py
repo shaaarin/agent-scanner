@@ -32,6 +32,7 @@ EXPLICIT = {
     "marker/hooks-command": ("malicious", "claude-code-hooks", "own marker fixture"),
     "marker/shell-persistence": ("malicious", "shell-persistence", "own marker fixture"),
     "marker/bang-injection": ("malicious", "claude-code-bang-injection", "own marker fixture"),
+    "marker/bang-network": ("malicious", "claude-code-bang-injection", "own marker fixture"),
     "marker/benign-plain": ("benign", "legit-fixture", "own marker fixture"),
 }
 

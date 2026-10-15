@@ -18,6 +18,13 @@ from typing import Optional
 from app import procs
 
 SEVERITIES = ("critical", "high", "medium", "low", "info")
+# Свои правила (D-18): rules/yara -- исходники, rules/cisco-pack -- пак для
+# Cisco, собирается rules/build_pack.py при сборке образа (D-35).
+DEFAULT_RULES_DIR = Path(__file__).resolve().parents[2] / "rules"
+
+
+def rules_dir() -> Path:
+    return Path(os.environ.get("SKILLS_RULES_DIR") or DEFAULT_RULES_DIR)
 MAX_REPORT_BYTES = 20 * 1024 * 1024  # JSON движка больше -- считаем сбоем
 MAX_FINDINGS = 500  # на один запуск движка по одному скиллу
 MAX_TEXT = 2000  # символов в title/finding/fix
@@ -160,6 +167,10 @@ class Engine:
     def extra_env(self) -> dict[str, str]:
         return {}
 
+    def missing_rules(self) -> Optional[str]:
+        """Текст предупреждения, если свои правила не подключены."""
+        return None
+
     def parse(self, data: dict, skill_dir: Path, run: EngineRun) -> None:
         """Заполняет run.findings / own_verdict / warnings из JSON движка."""
         raise NotImplementedError
@@ -183,6 +194,8 @@ class Engine:
             ok_returncodes=self.ok_returncodes,
         )
         run = EngineRun(self.name, result.status, self.version, duration_sec=round(result.duration_sec, 2))
+        if missing := self.missing_rules():
+            run.warnings.append(missing)
         if result.status != "ok":
             run.error = result.error
             return run

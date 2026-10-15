@@ -70,12 +70,19 @@ def test_external_cases_discovers_skill_dirs(tmp_path):
 
 
 def test_marker_fixtures_are_inert():
-    """Маркерные фикстуры не должны содержать сетевых вызовов и реальных хостов."""
-    forbidden = ("curl", "wget", "http://", "https://", "nc ", "/dev/tcp")
+    """Маркерные фикстуры не ходят в сеть по-настоящему: адреса -- только в
+    зарезервированной зоне .invalid (никогда не резолвится), без wget/nc/dev-tcp."""
+    import re
+
+    forbidden = ("wget", "nc ", "/dev/tcp")
     for p in (CORPUS_DIR / "marker").rglob("*"):
         if p.is_file():
             text = p.read_text(encoding="utf-8")
             assert not any(tok in text for tok in forbidden), f"{p}: сетевой вызов в маркерной фикстуре"
+            hosts = re.findall(r"https?://([^/\s`'\"]+)", text)
+            assert all(h.endswith(".invalid") for h in hosts), f"{p}: адрес вне .invalid: {hosts}"
+            if "curl" in text:
+                assert hosts, f"{p}: curl без адреса .invalid"
 
 
 def test_no_binary_or_av_test_files_in_corpus():

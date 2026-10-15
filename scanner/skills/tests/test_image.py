@@ -131,16 +131,6 @@ def _docker_run(script: str) -> str:
     return result.stdout
 
 
-@pytest.fixture(scope="module")
-def image():
-    if not shutil.which("docker"):
-        pytest.skip("docker не найден")
-    probe = subprocess.run(["docker", "image", "inspect", IMAGE], capture_output=True)
-    if probe.returncode != 0:
-        pytest.skip(f"образ {IMAGE} не собран (docker compose build scanner-skills)")
-    return IMAGE
-
-
 @pytest.mark.docker
 def test_image_engine_versions(image):
     out = _docker_run(
@@ -198,6 +188,7 @@ for name in engines.ENGINES:
     run = engines.get(name).run(Path(sys.argv[1]), workdir=Path("/tmp/runs") / name, timeout=240)
     out[name] = {"status": run.status, "error": run.error, "version": run.version, "verdict": run.own_verdict,
                  "warnings": run.warnings, "rules": sorted({f.rule_id for f in run.findings}),
+                 "titles": {f.rule_id: f.title for f in run.findings},
                  "max": [f.severity for f in run.findings][:1]}
 print(json.dumps(out))
 """
@@ -237,3 +228,21 @@ def test_image_adapters_report_osv_offline(image):
     assert out["skillspector"]["status"] == "ok", out
     assert OSV_WARNING in out["skillspector"]["warnings"]
     assert out["cisco"]["status"] == "ok"
+
+
+@pytest.mark.docker
+@pytest.mark.parametrize(
+    "case, rule",
+    [
+        ("marker/shell-persistence", "YARA_skills_shell_rc_persistence"),
+        ("marker/bang-network", "YARA_skills_bang_injection_network_or_secrets"),
+    ],
+)
+def test_image_own_rules_in_both_engines(image, case, rule):
+    """Свои правила подключены в образе и срабатывают в обоих движках (D-18)."""
+    out = _adapters_in_image(f"/corpus/{case}")
+    for engine in ("cisco", "skillspector"):
+        assert out[engine]["status"] == "ok", out
+        assert rule in out[engine]["rules"], (engine, out[engine]["rules"])
+        assert "не подключены" not in " ".join(out[engine]["warnings"])
+    assert out["cisco"]["titles"][rule] == out["skillspector"]["titles"][rule]

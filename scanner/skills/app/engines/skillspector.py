@@ -7,6 +7,7 @@
 справочно (D-10)."""
 import json
 import os
+import re
 from pathlib import Path
 
 from app.engines.base import (
@@ -20,10 +21,13 @@ from app.engines.base import (
     clip,
     normalize_severity,
     relative_file,
+    rules_dir,
     to_confidence,
     to_int,
 )
 
+# pattern YARA-находки: "YARA rule '<имя>': <meta.description> [<категория>]".
+YARA_PATTERN_RE = re.compile(r"YARA rule '([A-Za-z0-9_]+)'(?::\s*(.*?))?(?:\s*\[[^\]]*\])?$")
 OSV_FALLBACK_MARKERS = ("OSV.dev API request failed", "OSV.dev API request timed out", "OSV.dev unreachable")
 OSV_WARNING = "OSV.dev недоступен — уязвимости зависимостей оценены по встроенным данным SkillSpector, severity может быть завышена"
 
@@ -37,8 +41,22 @@ class SkillSpectorEngine(Engine):
     # 1 -- «риск выше порога», отчёт записан; 2 -- ошибка (cli.py v2.11.2).
     ok_returncodes = (0, 1)
 
+    @staticmethod
+    def yara_dir() -> Path:
+        return rules_dir() / "yara"
+
+    def _has_rules(self) -> bool:
+        return self.yara_dir().is_dir() and any(self.yara_dir().glob("*.yara"))
+
     def command(self, skill_dir: Path, output: Path) -> list[str]:
-        return [self.binary, "scan", str(skill_dir), "--no-llm", "-f", "json", "-o", str(output)]
+        cmd = [self.binary, "scan", str(skill_dir), "--no-llm"]
+        if self._has_rules():
+            # Добавляются к встроенным правилам SkillSpector (D-18).
+            cmd += ["--yara-rules-dir", str(self.yara_dir())]
+        return cmd + ["-f", "json", "-o", str(output)]
+
+    def missing_rules(self) -> str | None:
+        return None if self._has_rules() else "свои YARA-правила не подключены: нет rules/yara"
 
     def extra_env(self) -> dict[str, str]:
         # Таймаут запроса в OSV.dev можно задать в compose; больше ничего из
@@ -63,16 +81,22 @@ class SkillSpectorEngine(Engine):
             location = as_dict(item.get("location"))
             category = clip(item.get("category"), 100)
             pattern = clip(item.get("pattern"), 300)
+            yara_rule = YARA_PATTERN_RE.match(str(item.get("pattern") or ""))
             run.findings.append(
                 Finding(
                     engine=self.name,
-                    rule_id=str(item.get("id") or "unknown"),
+                    # Все YARA-находки SkillSpector -- id YR1; берём имя правила,
+                    # как у Cisco (YARA_<имя>), чтобы находки сопоставлялись.
+                    rule_id=f"YARA_{yara_rule.group(1)}" if yara_rule else str(item.get("id") or "unknown"),
                     severity=normalize_severity(item.get("severity")),
                     confidence=to_confidence(item.get("confidence")),
                     category=category,
                     file=relative_file(location.get("file"), skill_dir),
                     line=to_int(location.get("start_line")),
-                    title=pattern or category or str(item.get("id") or "Находка SkillSpector"),
+                    title=(yara_rule and clip(yara_rule.group(2), 300))
+                    or pattern
+                    or category
+                    or str(item.get("id") or "Находка SkillSpector"),
                     finding=clip(item.get("explanation")),
                     fix=clip(item.get("remediation")),
                     snippet=clip(item.get("finding") or item.get("code_snippet"), MAX_SNIPPET),

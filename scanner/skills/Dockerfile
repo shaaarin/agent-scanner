@@ -51,9 +51,19 @@ RUN python -m venv /opt/service \
 
 ENV PATH=/opt/service/bin:$PATH \
     CISCO_BIN=/opt/engines/cisco/bin/skill-scanner \
-    SKILLSPECTOR_BIN=/opt/engines/skillspector/bin/skillspector
+    SKILLSPECTOR_BIN=/opt/engines/skillspector/bin/skillspector \
+    SKILLS_RULES_DIR=/srv/rules
 
 WORKDIR /srv
+
+# Свои YARA-правила (D-18, D-35): пак для Cisco генерируется из meta правил,
+# каждое правило компилируется YARA-X (Cisco) и libyara (SkillSpector) --
+# сломанное правило валит сборку, а не скан.
+COPY rules/yara ./rules/yara
+COPY rules/build_pack.py ./rules/build_pack.py
+RUN /opt/engines/cisco/bin/python rules/build_pack.py --compile yara_x --out rules/cisco-pack \
+    && /opt/engines/skillspector/bin/python rules/build_pack.py --compile yara
+
 COPY app ./app
 
 EXPOSE 8000

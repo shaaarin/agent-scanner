@@ -204,13 +204,54 @@ def test_run_skillspector_offline_stderr(tmp_path, monkeypatch, skill):
     assert run.ok and run.warnings == [OSV_WARNING]
 
 
-def test_command_flags(tmp_path):
+def test_command_flags(tmp_path, rules_env):
     out = tmp_path / "o.json"
     cisco = engines.get("cisco").command(tmp_path, out)
     assert "--use-behavioral" in cisco and "--use-llm" not in cisco and "--use-osv" not in cisco
+    assert "--custom-rules" not in cisco  # заменил бы встроенные правила Cisco (D-18)
+    assert cisco[cisco.index("--trusted-rule-pack") + 1] == str(rules_env / "cisco-pack")
     assert cisco[-2:] == ["--output", str(out)]
     spector = engines.get("skillspector").command(tmp_path, out)
     assert "--no-llm" in spector and spector[-2:] == ["-o", str(out)]
+    assert spector[spector.index("--yara-rules-dir") + 1] == str(rules_env / "yara")
+    assert engines.get("cisco").missing_rules() is None
+    assert engines.get("skillspector").missing_rules() is None
+
+
+def test_missing_rules_warn_and_run_without(tmp_path, monkeypatch):
+    monkeypatch.setenv("SKILLS_RULES_DIR", str(tmp_path / "no-rules"))
+    out = tmp_path / "o.json"
+    assert "--trusted-rule-pack" not in engines.get("cisco").command(tmp_path, out)
+    assert "--yara-rules-dir" not in engines.get("skillspector").command(tmp_path, out)
+    assert "rules/cisco-pack" in engines.get("cisco").missing_rules()
+    assert "rules/yara" in engines.get("skillspector").missing_rules()
+
+
+def test_missing_rules_warning_in_run(tmp_path, monkeypatch, skill):
+    install_fixture(tmp_path, monkeypatch, "cisco", "cisco-benign-plain.json")
+    monkeypatch.setenv("SKILLS_RULES_DIR", str(tmp_path / "no-rules"))
+    run = engines.get("cisco").run(skill, workdir=tmp_path / "run", timeout=30)
+    assert run.ok and run.warnings == [engines.get("cisco").missing_rules()]
+
+
+def test_default_rules_dir(monkeypatch):
+    monkeypatch.delenv("SKILLS_RULES_DIR")
+    assert base.rules_dir() == base.DEFAULT_RULES_DIR
+    assert (base.DEFAULT_RULES_DIR / "yara").is_dir()
+
+
+def test_own_yara_rule_same_id_in_both_engines(tmp_path):
+    """Своё YARA-правило: у обоих движков rule_id YARA_<имя> и заголовок из meta."""
+    rule = "YARA_skills_shell_rc_persistence"
+    title = "Script appends to a shell startup file (persistence)"
+    cisco = _parse("cisco", "cisco-shell-persistence-rules.json", tmp_path)
+    spector = _parse("skillspector", "skillspector-shell-persistence-rules.json", tmp_path)
+    for run in (cisco, spector):
+        [own] = [f for f in run.findings if f.rule_id == rule]
+        assert (own.severity, own.file, own.line, own.title) == ("high", "scripts/setup.sh", 3, title)
+    # Встроенные YARA-правила SkillSpector (все -- id YR1) тоже получают имя.
+    assert "YARA_backdoor_persistence" in {f.rule_id for f in spector.findings}
+    assert "YR1" not in {f.rule_id for f in spector.findings}
 
 
 def test_default_binaries(monkeypatch):

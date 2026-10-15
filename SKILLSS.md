@@ -25,7 +25,7 @@
 | D-09 | LLM не может убрать находку статики: у Cisco meta-фильтр выключен, SkillSpector запускается дважды (`--no-llm` и с LLM), находки объединяются | принято (реализация — на этапе LLM, D-37) | Макс | Защита от инъекции в «судью» и от фильтрации ложных срабатываний LLM'ом |
 | D-10 | Итоговый вердикт считаем сами по находкам; собственные вердикты движков — справочные | принято (пороги — D-12) | — | SkillSpector без LLM поставил SAFE скиллу, отправляющему AWS-креды наружу |
 | D-11 | Каждый движок — свой venv в одном образе, запуск через CLI в отдельном процессе с таймаутом | принято (подтверждено D-43) | Макс | Конфликт зависимостей (LiteLLM против LangChain), изоляция падений, креды LLM только в env процесса |
-| D-12 | Пороги вердикта: `critical → block`, `high → review`; `medium`/`low` видны в отчёте, вердикт `pass`. Отказ архива по признакам атаки — `block` | принято (закрывает R-11) | Макс | Иначе большинство нормальных скиллов со скриптами получат `review` (оба движка дают MEDIUM на легитимный HTTP-запрос), и на вердикт перестанут смотреть |
+| D-12 | Пороги вердикта: `critical → block`, `high → review`; `medium`/`low` видны в отчёте, вердикт `pass`. Отказ архива по признакам атаки — `block` | принято (закрывает R-11); правило `block` заменено D-52 | Макс | Иначе большинство нормальных скиллов со скриптами получат `review` (оба движка дают MEDIUM на легитимный HTTP-запрос), и на вердикт перестанут смотреть |
 | D-13 | В одном архиве — до 10 скиллов. Каждый скилл сканируется отдельно, вердикт по каждому и общий (худший). Больше 10 — отказ на загрузке | частично заменено → D-45 (лимит), вердикт по скиллу и общий — в силе | Макс | Пачки скиллов — нормальный сценарий; лимит держит время скана |
 | D-14 | Находки двух движков не склеиваем: группируем по скиллу и файлу, у каждой находки — колонка «движок». Склейку рассмотрим после реальных отчётов на корпусе | принято (закрывает R-12) | Макс | Движки по-разному указывают строки и категории, эвристика склейки даст дубли или склеит разное |
 | D-15 | Миграция `0005` в рамках задачи: таблица `SkillArchive` + `Scan.agent_config_id` становится nullable. Для `agent_skills` обязателен `archive_id`, для остальных типов `agent_config_id` проверяется в коде создания скана. Код, который ждёт агента у скана (список и страница скана в web, `list_scans`), делаем `null`-безопасным. Показать лиду на встрече | заменено → D-38 | Макс | Без этого скан скилла не создать. Идея лида про «цель сканирования» касается git-репозиториев, архивы он вынес отдельно — конфликта не ждём; в худшем случае у `Scan` появится ещё одно поле |
@@ -64,6 +64,8 @@
 | D-48 | Образ (уточняет D-32): lock-файлы `requirements-{service,cisco,skillspector}.lock` генерирует `scripts/compile-locks.sh` (uv 0.9.5 в контейнере, `--universal --python-version 3.12` — годится для arm64 и amd64), источники — `requirements-*.in`. Установка: `--require-hashes --only-binary=:all:`. SkillSpector хэшем pip не проверить (git): его зависимости и `hatchling` — из lock, сам пакет — `git clone --branch v2.11.2` + проверка `rev-parse HEAD` = коммит D-17 + `pip install --no-deps --no-build-isolation`. Базовый образ закреплён по digest. Сервис — venv `/opt/service`, движки — `/opt/engines/{cisco,skillspector}`, пути в `CISCO_BIN`/`SKILLSPECTOR_BIN` | принято | Макс, 2026-10-15 | pip не умеет `--require-hashes` для VCS-зависимостей; целостность SkillSpector обеспечивает SHA коммита |
 | D-49 | Получение исходников (уточняет D-21, D-42, D-44, §2.7): (1) zip скачивается потоком (≤ 50 МиБ), sha256 сверяется со снимком в `Scan.config.source`, несовпадение — `failed`; (2) отказ архива (`completed` + `block`): `zip_slip` — `..`, абсолютные пути, `\\` как разделитель, повторяющиеся пути (без учёта регистра); `symlink`; `encrypted`; `limits` — записей > 5000, распаковано > 250 МиБ, сжатие > 100:1 (только у записей > 1 МиБ: мелкие файлы из повторов — норма); проверка до записи на диск и по реально прочитанным байтам; файлы пишутся без exec-бита; (3) git: `GIT_ALLOW_PROTOCOL=http:https`, `core.symlinks=false`, без сабмодулей и hooks, таймаут ≤ остатка дедлайна, `.git` удаляется; превышение тех же лимитов размера — `failed` («сузьте актив»), не `block`: это не признак атаки; (4) скилл — папка с `SKILL.md` (не симлинк), вложенный скилл — часть внешнего, `.git`/`node_modules`/`__pycache__`/`.venv` не обходятся; имя — `name` из frontmatter (`yaml.safe_load`, ≤ 64 КиБ), иначе имя папки; (5) результат отклонённого архива строит `app/report.py` уже сейчас; в `Scan.results` добавлено поле `source` (zip: sha256/размер; git: URL, ветка, коммит, без токена), `archive` для zip — как в §2.7 | принято | Макс, 2026-10-15 | Детали, которые D-21/D-44 не задавали; формат отказа задан §2.7 и не зависит от движков |
 | D-50 | Адаптеры движков (`app/engines/`, этап `app/analysis.py`; уточняет D-11, D-23, D-36, D-37, закрывает R-32): (1) `Engine.run(skill_dir, workdir, timeout, llm=None)`, с `llm` — отказ (D-37). Cisco: `scan --use-behavioral --format json --output` (без `--use-llm`/`--use-osv`); SkillSpector: `scan --no-llm -f json -o`. Успех = допустимый код возврата (Cisco 0; SkillSpector 0 и 1 — «риск выше порога», отчёт записан; 2 — ошибка) + JSON-объект нужной структуры; иначе движок «не отработал» с причиной; (2) окружение процесса движка — с нуля (PATH, свои HOME/TMPDIR на запуск, локаль), из окружения сервиса передаётся только `SKILLSPECTOR_OSV_TIMEOUT`; (3) находка — поля §2.7 + `snippet` (≤ 500 символов: фрагмент кода/совпадение); тексты движков (`title`/`finding`/`fix`) — как есть, по-английски; severity: Cisco `SAFE` → `info`, незнакомое → `medium` (не прячем); путь — относительно папки скилла; ≤ 500 находок на запуск, отчёт движка ≤ 20 МиБ; подавленные эвристикой SkillSpector (`suppressed`) не берём; (4) предупреждения прогона: «OSV.dev недоступен» (по stderr и по находке SC4) — один раз на скан; неполный анализ SkillSpector (`is_complete=false`: покрытие, анализаторы degraded/failed, ссылки на отсутствующие файлы) — по скиллу; самопроверку правил Cisco (`rule_contract`) не показываем — это состояние движка, не скилла; (5) скиллы — по очереди, движки одного скилла — параллельно; упал движок — идём дальше (D-23), ни одного успешного запуска за скан — `failed` «Ни один движок не отработал»; (6) R-32: эталон корпуса — образ с сетью, `eval/baseline.json` переснят (изменился один кейс, `contextual`, в статистику не входит) | принято | Макс (R-32), 2026-10-15 | Живой прогон `anthropics/skills`: SkillSpector выходил с кодом 1 на 7 из 20 скиллов при валидном отчёте — `eval/` этого не замечал, потому что читал JSON при любом коде |
+| D-51 | Свои правила и мини-проверка frontmatter (уточняет D-03, D-18, D-31, D-35): (1) YARA-правила `scanner/skills/rules/yara/*.yara` только на пробелы корпуса: закрепление через shell rc (`>>`/`tee -a` в `~/.bashrc` и т.п.), через cron/launchd, `` !`…` `` с сетью/секретами/base64; имена `skills_*`, в отчёте у обоих движков `rule_id` = `YARA_<имя>` (у SkillSpector все YARA-находки приходят как `YR1` — адаптер берёт имя правила из `pattern`), заголовок — `meta.description`; (2) **правила на `hooks` в YARA нет**: Cisco frontmatter не видит, а структуру надёжнее разбирать YAML'ом — `hooks` целиком закрывает `app/manifest_check.py`; (3) `rules/build_pack.py` (только stdlib): проверка `meta` (категория из `ThreatCategory` Cisco 2.1.0, severity, непустое описание, уникальные имена), генерация `rules/cisco-pack/` (`pack.yaml` schema v2 + копия `.yara`), компиляция YARA-X питоном venv Cisco и libyara питоном venv SkillSpector при сборке образа; пак в git не хранится (`rules/.gitignore`), в образе — `SKILLS_RULES_DIR=/srv/rules`; без правил адаптер работает и пишет предупреждение; (4) `manifest_check` — движок `manifest` версии `1`, выполняется всегда (D-47), в процессе сервиса: `hooks` с командами (`type: command` или без типа, любая вложенность) → high `MANIFEST_HOOKS_COMMAND`; `allowed-tools` с `Bash`/`Bash(*)` → medium `MANIFEST_ALLOWED_TOOLS_BASH` (`Bash(git status:*)` не отмечается); каждый `` !`…` `` в теле → high `MANIFEST_SHELL_INJECTION` (≤ 20 на файл); проверяются все `SKILL.md` в папке скилла; битый/слишком большой frontmatter — предупреждение, не находка; тексты находок — по-русски; не считается «движком» для правила «оба движка упали → failed» (D-23); (5) корпус: новый маркер `marker/bang-network` (`curl` на `*.invalid`), тест инертности маркеров допускает только хосты `.invalid`; `run_eval.py` гоняет движки со своими правилами (`--rules-dir`/`$SKILLS_RULES_DIR`), baseline переснят | принято | Макс, 2026-10-15 | Корпус: Cisco 20/25 (было 18/24), SkillSpector 8/25, с проверкой frontmatter 22/25; на 19 легитимных скиллах anthropics — ни одного нового срабатывания |
+| D-52 | Вердикт и отчёт (заменяет правило `block` из D-12, закрывает R-31 — вариант «г»): по скиллу **`block`** — находка high+ от наших сигналов (свои YARA-правила `YARA_skills_*` в любом движке; проверка frontmatter `manifest`, в т.ч. любой `` !`…` `` и `hooks`) **или** critical сразу у Cisco и у SkillSpector (упавший или не выбранный движок не подтверждает); **`review`** — любая другая находка critical/high; **`pass`** — иначе (medium/low/info видны в отчёте). Общий вердикт — худший из скиллов. У скилла `verdict_reasons` (почему block/review, по-русски). Формат §2.7 расширен: `source`, `verdict_counts`, `warnings` (на весь скан: OSV.dev), `findings_truncated`; у движка верхнего уровня `label`, `skills_failed`, статус `partial` (часть скиллов не отработала); у скилла `complete`, `findings_omitted`, у его движков `findings`, `error`, `warnings`; у находки `snippet`. В `Scan.results` не больше 2000 находок на скан — самые серьёзные, сводки и вердикт по всем (`GET /scans` отдаёт `results` целиком) | принято | Макс, 2026-10-15 | Корпус: на 19 легитимных скиллах `block` 0 (было бы 3 по D-12), вредоносные: `block` 6, `review` 16, `pass` 3 (CVE-фикстуры, не видны без LLM). Живой прогон `anthropics/skills`: `review` 11, `pass` 9, `block` 0 |
 
 ---
 
@@ -208,53 +210,65 @@ scanner/skills/
 | `web/src/components/SkillsScanResults.tsx` | вердикт, полнота, находки, статус движков |
 | `web/src/pages/ScansDetail.tsx`, список сканов | не падать на пустом `agent_config_id` |
 
-### 2.7 Формат `Scan.results` (D-36)
+### 2.7 Формат `Scan.results` (D-36, D-52)
+
+Сверено с живым прогоном 2026-10-15 (`app/report.py`).
 
 ```json
 {
   "engine": "skills-scanner",
-  "archive": {"id": 7, "filename": "pdf-tools.zip", "sha256": "…", "size_bytes": 18234},
+  "source": {"kind": "zip", "asset_id": 13, "filename": "pack.zip", "sha256": "…", "size_bytes": 1558},
+  "archive": {"id": 13, "filename": "pack.zip", "sha256": "…", "size_bytes": 1558},
   "verdict": "block",
   "complete": true,
   "rejected": null,
   "llm": {"enabled": false},
-  "summary": {"critical": 1, "high": 2, "medium": 3, "low": 0, "info": 1, "total": 7},
+  "summary": {"critical": 0, "high": 7, "medium": 1, "low": 0, "info": 4, "total": 12},
+  "verdict_counts": {"pass": 1, "review": 0, "block": 3},
   "engines": {
-    "cisco":        {"version": "2.1.0",  "status": "ok", "duration_sec": 6.7, "llm": false, "error": null},
-    "skillspector": {"version": "2.11.2", "status": "ok", "duration_sec": 3.1, "llm": false, "error": null},
-    "manifest":     {"version": "1",      "status": "ok", "duration_sec": 0.01, "llm": false, "error": null}
+    "cisco":        {"label": "Cisco skill-scanner",  "version": "2.1.0",  "status": "ok", "duration_sec": 18.07, "llm": false, "error": null, "skills_failed": 0},
+    "skillspector": {"label": "NVIDIA SkillSpector",  "version": "2.11.2", "status": "ok", "duration_sec": 8.43,  "llm": false, "error": null, "skills_failed": 0},
+    "manifest":     {"label": "Проверка frontmatter", "version": "1",      "status": "ok", "duration_sec": 0.01,  "llm": false, "error": null, "skills_failed": 0}
   },
+  "warnings": [],
+  "findings_truncated": false,
   "skills": [{
-    "name": "pdf-tools",
-    "path": "pdf-tools",
+    "name": "marker-hooks-command",
+    "path": "markers/hooks-command",
     "verdict": "block",
-    "summary": {"critical": 1, "high": 2, "medium": 3, "low": 0, "info": 1, "total": 7},
+    "verdict_reasons": ["Проверка frontmatter: Скилл регистрирует hooks с shell-командами"],
+    "complete": true,
+    "summary": {"critical": 0, "high": 1, "medium": 1, "low": 0, "info": 1, "total": 3},
     "engines": {
-      "cisco":        {"status": "ok", "own_verdict": "unsafe", "duration_sec": 6.7},
-      "skillspector": {"status": "ok", "own_verdict": "SAFE",   "duration_sec": 3.1}
+      "cisco":        {"status": "ok", "own_verdict": "safe", "duration_sec": 4.41, "findings": 2, "error": null, "warnings": []},
+      "skillspector": {"status": "ok", "own_verdict": "SAFE", "duration_sec": 2.07, "findings": 0, "error": null, "warnings": []},
+      "manifest":     {"status": "ok", "own_verdict": null,   "duration_sec": 0.002, "findings": 1, "error": null, "warnings": []}
     },
+    "findings_omitted": 0,
     "findings": [{
-      "engine": "cisco",
-      "rule_id": "DATA_EXFIL_HTTP_POST",
-      "severity": "critical",
+      "engine": "manifest",
+      "rule_id": "MANIFEST_HOOKS_COMMAND",
+      "severity": "high",
       "confidence": null,
-      "category": "data_exfiltration",
-      "file": "scripts/check.py",
-      "line": 9,
-      "title": "HTTP POST с чувствительными данными",
-      "finding": "…",
-      "fix": "…"
+      "category": "command_injection",
+      "file": "SKILL.md",
+      "line": 4,
+      "title": "Скилл регистрирует hooks с shell-командами",
+      "finding": "Во frontmatter объявлены hooks Claude Code с командами (1). …",
+      "fix": "Уберите hooks из скилла или проверьте каждую команду вручную перед установкой.",
+      "snippet": "echo SCANNER-FIXTURE-MARKER"
     }]
   }]
 }
 ```
 
-- `verdict` верхнего уровня — худший из вердиктов скиллов (D-13); пороги — D-12.
-- `complete: false`, если хоть один движок по хоть одному скиллу не `ok` (D-23); `status`: `ok` / `failed` / `timeout`.
-- `rejected` — если архив отклонён при распаковке (D-21): `{"reason": "zip_slip" | "symlink" | "encrypted" | "limits", "detail": "…"}`, `verdict: "block"`, `skills: []`.
-- `findings` внутри скилла не склеиваются между движками (D-14), сортировка: severity, затем файл и строка. `confidence` — только у SkillSpector (D-34).
-- Незнакомые поля в JSON движков игнорируются, отсутствующие → `null`.
-- Сырые отчёты движков в `Scan.results` не кладём.
+- `verdict` скилла — D-52; верхнего уровня — худший из скиллов (D-13). `pass` — «находок high+ нет», не «безопасен».
+- `source` для git: `{kind: "repository", git_repo_url, git_ref, commit}`, без токена; `archive` — только для zip.
+- `complete: false`, если хоть один движок по хоть одному скиллу не `ok` (D-23). Статус движка по скиллу: `ok` / `failed` / `timeout`; верхнего уровня — ещё `partial`.
+- `rejected` — архив отклонён при распаковке (D-21): `{"reason": "zip_slip" | "symlink" | "encrypted" | "limits", "detail": "…"}`, `verdict: "block"`, `skills: []`, `engines: {}`.
+- `findings` скилла не склеиваются между движками (D-14), сортировка: severity, файл, строка. `confidence` — только у SkillSpector, в вердикте не участвует (D-34). Тексты Cisco/SkillSpector — как у движков (по-английски), `manifest` — по-русски.
+- `engines` — только выбранные движки + `manifest` (всегда). `warnings` — предупреждения про окружение (OSV.dev недоступен), про конкретный скилл — в `skills[].engines.<движок>.warnings`.
+- Незнакомые поля в JSON движков игнорируются, отсутствующие → `null`. Сырые отчёты движков в `Scan.results` не кладём.
 
 ---
 
@@ -433,7 +447,7 @@ SkillSpector отдаёт `confidence` (0–1) у каждой находки, C
 Предлагаю: лимит 50 скиллов на скан (env `SCAN_MAX_SKILLS`), при превышении — `failed` с текстом «слишком много скиллов, сузьте актив». С очередью и таймаутами (D-27, D-33) это ~5–10 мин статики.
 Вопрос: 50 ок?
 
-**R-31. Ложные срабатывания движков на легитимных скиллах** — открыт
+**R-31. Ложные срабатывания движков на легитимных скиллах** — закрыт → D-52 (вариант «г»)
 Прогон подзадачи 1 (19 скиллов `anthropics/skills` @ dbd4588, статика): Cisco даёт HIGH/CRITICAL на 5 из 19 (CRITICAL на `claude-api`, `docx`, `skill-creator`: `os.system`, цепочки чтения env), SkillSpector — HIGH на 10 из 19 («Anti-Refusal Statement», «Env Variable Harvesting», «Hidden Instructions»). Правило D-12 «critical → block» будет блокировать нормальные скиллы.
 Варианты: (а) оставить как есть и показывать «block» с пояснением; (б) block только если CRITICAL подтверждён обоими движками или относится к узкому списку категорий (скрытые инструкции, эксфильтрация), остальное — review; (в) block только по нашим собственным правилам и находкам распаковки, всё от движков — максимум review.
 Вопрос: какой вариант? Мой выбор — (б).
@@ -482,3 +496,5 @@ SkillSpector отдаёт `confidence` (0–1) у каждой находки, C
 - 2026-10-15 — подзадача 4 готова: образ с движками (`/opt/engines/cisco` 582 МБ, `/opt/engines/skillspector` 279 МБ, `/opt/service` 58 МБ; образ 1,59 ГБ, arm64), lock-файлы с хэшами и `scripts/compile-locks.sh`, D-48. Тесты: 66 passed (в т.ч. проверка образа: версии, изоляция venv, оба движка сканируют инертный скилл). Живая проверка: корпус в образе под hardening compose — совпадает с baseline, кроме одного кейса из-за OSV.dev; открыт R-32. Baseline не менял — жду ответа.
 - 2026-10-15 — подзадача 5 готова: `app/archive.py` (безопасная распаковка), `app/repo.py` + `app/git_auth.py` (клон), `app/sources.py` (этап и поиск скиллов), `app/report.py` (результат отказа архива), runner: отказ → сразу «Сохранение результатов», D-49. Тесты: 118 passed. Живая проверка через control-api: zip с 2 скиллами → найдены; zip с флагом шифрования и zip-бомба 1028:1 (control-api их пропускает) → `completed`/`block`; `anthropics/skills` по https → коммит dbd4588, 20 скиллов. До подзадачи 6 сканы честно падают на «Статический анализ». R-32 по-прежнему открыт.
 - 2026-10-15 — подзадача 6 готова: адаптеры `app/engines/` (Cisco, SkillSpector) и этап `app/analysis.py`, D-50; R-32 закрыт (baseline переснят в образе с сетью: `unpinned-dependency` SkillSpector HIGH → LOW). Тесты: 184 passed (настоящие отчёты движков как фикстуры, подставные CLI, адаптеры на настоящих движках в образе, в т.ч. `--network none` → предупреждение OSV); `eval/` — 27 passed. Живая проверка: zip из 2 скиллов — оба движка ок, ~5 с на скилл; `anthropics/skills` (20 скиллов) — 340 с, 331 находка, все запуски ок; самый долгий — SkillSpector на `claude-api` 141 с (лимит 300 с). Найден и исправлен баг: код 1 SkillSpector считался сбоем. До подзадачи 8 скан честно падает на «Сохранение результатов».
+- 2026-10-15 — подзадача 7 готова: 3 YARA-правила (`rules/yara/`), генератор пака Cisco с компиляцией YARA-X и libyara при сборке (`rules/build_pack.py`), `app/manifest_check.py` в этапе анализа, D-51. Тесты: 234 passed (в т.ч. в образе: срабатывание правил на инертных образцах, сломанное правило валит обе компиляции, список категорий совпадает с Cisco, свои правила в обоих движках); `eval/` — 27 passed локально, 35 в образе с `FULL_EVAL=1`. Корпус со своими правилами: Cisco 20/25, SkillSpector 8/25, + frontmatter 22/25; ложных срабатываний не прибавилось (5/26 и 10/26 — R-31). Живая проверка через control-api: zip из 4 маркеров — `hooks`, `` !`curl` ``, shell rc → high, чистый → без находок.
+- 2026-10-15 — R-31 закрыт вариантом «г» (Макс), D-52; D-12 в части `block` заменён. Подзадача 8 готова: `app/report.py` (вердикт по D-52, причины, сводки, формат §2.7, ограничение 2000 находок на скан), скан доходит до `completed`; заглушка `StageNotImplemented` убрана; §2.7 переписан по живому отчёту. Тесты: 263 passed (с docker). Живая проверка: zip из 4 маркеров → `block` (hooks, `` !`curl` ``, shell rc), чистый → `pass`; `anthropics/skills` → `review` 11, `pass` 9, `block` 0, отчёт 206 КБ. `!`echo`` из проверки frontmatter даёт `block` (как в «г»); если жёстко — поменять одной строкой.
