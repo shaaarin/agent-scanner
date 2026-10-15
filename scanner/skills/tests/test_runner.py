@@ -99,7 +99,10 @@ def test_describe_source_hides_token():
 # --- прогон скана ----------------------------------------------------------------------
 
 
-def test_unimplemented_stage_fails_honestly(api):
+def test_engines_missing_fails_honestly(api, monkeypatch, tmp_path):
+    """Вне образа движков нет: скан не делает вид, что всё чисто."""
+    monkeypatch.setenv("CISCO_BIN", str(tmp_path / "no-cisco"))
+    monkeypatch.setenv("SKILLSPECTOR_BIN", str(tmp_path / "no-skillspector"))
     content = make_zip({"demo/SKILL.md": skill_md("demo")})
     api.archives[1] = content
     api.add_scan(1, config=json.dumps({"source": zip_source(content)}))
@@ -107,7 +110,7 @@ def test_unimplemented_stage_fails_honestly(api):
     scan = api.scans[1]
     assert scan["status"] == "failed"
     assert scan["phase"] == "Ошибка"
-    assert scan["error"] == "Статический анализ ещё не реализован в этой версии scanner-skills"
+    assert scan["error"].startswith("Ни один движок не отработал: Cisco skill-scanner: не удалось запустить")
     assert json.loads(scan["results"]) == {"error": scan["error"]}
     assert scan["finished_at"]
     assert api.phases(1) == ["Инициализация", "Получение исходников", "Статический анализ", "Ошибка"]

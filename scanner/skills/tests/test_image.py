@@ -5,6 +5,7 @@ lock-файлы с хэшами (D-32, D-48), раздельные окруже�
 `docker` и пропускаются, если нет docker или образа (`SKILLS_IMAGE`,
 по умолчанию agent-scanner-scanner-skills -- его собирает
 `docker compose build scanner-skills`)."""
+import json
 import os
 import re
 import shutil
@@ -184,3 +185,55 @@ def test_image_engines_scan_inert_skill(image):
     )
     assert "cisco=0" in out and "spector=0" in out
     assert out.strip().endswith("ok True")
+
+
+# --- адаптеры движков на настоящих движках (подзадача 6) ---------------------------------
+
+ADAPTER_SCRIPT = """
+import json, sys
+from pathlib import Path
+from app import engines
+out = {}
+for name in engines.ENGINES:
+    run = engines.get(name).run(Path(sys.argv[1]), workdir=Path("/tmp/runs") / name, timeout=240)
+    out[name] = {"status": run.status, "error": run.error, "version": run.version, "verdict": run.own_verdict,
+                 "warnings": run.warnings, "rules": sorted({f.rule_id for f in run.findings}),
+                 "max": [f.severity for f in run.findings][:1]}
+print(json.dumps(out))
+"""
+
+
+def _adapters_in_image(skill: str, *docker_args: str) -> dict:
+    """Текущий код app/ (смонтирован поверх образа) гоняет настоящие движки."""
+    result = subprocess.run(
+        ["docker", "run", "--rm", *docker_args,
+         "-v", f"{ROOT / 'app'}:/srv/app:ro",
+         "-v", f"{ROOT / 'eval' / 'corpus'}:/corpus:ro",
+         "--entrypoint", "python", IMAGE, "-c", ADAPTER_SCRIPT, skill],
+        capture_output=True, text=True, timeout=600,
+    )
+    assert result.returncode == 0, result.stderr[-2000:]
+    return json.loads(result.stdout.strip().splitlines()[-1])
+
+
+@pytest.mark.docker
+def test_image_adapters_on_corpus_case(image):
+    out = _adapters_in_image("/corpus/cisco/data-exfiltration/environment-secrets")
+    assert out["cisco"]["status"] == "ok" and out["skillspector"]["status"] == "ok", out
+    assert "DATA_EXFIL_SENSITIVE_FILES" in out["cisco"]["rules"]
+    assert out["cisco"]["max"] == ["high"] and out["cisco"]["verdict"] == "unsafe"
+    assert "PE3" in out["skillspector"]["rules"]
+    assert out["cisco"]["version"] == CISCO_VERSION and out["skillspector"]["version"] == SKILLSPECTOR_VERSION
+
+
+@pytest.mark.docker
+def test_image_adapters_report_osv_offline(image):
+    """Без сети SkillSpector берёт встроенные данные -- адаптер это видит (R-32, D-50)."""
+    from app.engines.skillspector import OSV_WARNING
+
+    out = _adapters_in_image(
+        "/corpus/cisco/supply-chain-attack/unpinned-dependency", "--network", "none", "-e", "SKILLSPECTOR_OSV_TIMEOUT=3"
+    )
+    assert out["skillspector"]["status"] == "ok", out
+    assert OSV_WARNING in out["skillspector"]["warnings"]
+    assert out["cisco"]["status"] == "ok"

@@ -38,7 +38,9 @@ docker run --rm -v "$PWD:/eval" -w /eval --entrypoint sh agent-scanner-scanner-s
 ```
 
 Severity SkillSpector по зависимостям зависит от доступности OSV.dev: без сети он берёт
-встроенные данные и оценивает строже (R-32 в `SKILLSS.md`).
+встроенные данные и оценивает строже. Поэтому эталон — образ **с сетью**, `baseline.json`
+снят так (R-32, D-50 в `SKILLSS.md`); прогон без сети разойдётся с ним в кейсе
+`cisco/supply-chain-attack/unpinned-dependency`.
 
 `manifest.yaml` генерируется `build_manifest.py` (метки Cisco берутся из их `_expected.json`).
 Новый каталог в `corpus/` без записи в `EXPLICIT` генератор не пропустит. `baseline.json`

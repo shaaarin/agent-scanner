@@ -42,5 +42,5 @@ def test_run_starts_and_reports_duplicate(api, monkeypatch):
     end = time.monotonic() + 10
     while runner.is_running(7) and time.monotonic() < end:
         time.sleep(0.02)
-    assert api.scans[7]["status"] == "failed"  # analyze ещё не реализован
-    assert api.scans[7]["error"].startswith("Статический анализ ещё не реализован")
+    assert api.scans[7]["status"] == "failed"  # fetch подменён: скиллов нет
+    assert api.scans[7]["error"] == "нет скиллов для анализа"

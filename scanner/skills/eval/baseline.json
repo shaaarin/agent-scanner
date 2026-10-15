@@ -109,7 +109,7 @@
  },
  "cisco/supply-chain-attack/unpinned-dependency": {
   "cisco": "MEDIUM",
-  "skillspector": "HIGH"
+  "skillspector": "LOW"
  },
  "cisco/tool-chaining-abuse/attacker-forwarding": {
   "cisco": "MEDIUM",
