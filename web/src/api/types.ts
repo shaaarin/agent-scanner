@@ -316,6 +316,86 @@ export interface CodeScanResults {
   error?: string;
 }
 
+// Scan.results для type = "agent_skills" (пишет scanner-skills, формат --
+// SKILLSS.md §2.7). Вердикт считает платформа, `own_verdict` движков справочный.
+export type SkillsVerdict = "pass" | "review" | "block";
+export type SkillsSeverity = CodeScanSeverity | "info";
+export type SkillsEngineStatus = "ok" | "partial" | "failed" | "timeout";
+export type SkillsSummary = Record<SkillsSeverity, number> & { total: number };
+
+export interface SkillsFinding {
+  engine: string;
+  rule_id: string;
+  severity: SkillsSeverity;
+  confidence: number | null;
+  category: string | null;
+  file: string | null;
+  line: number | null;
+  title: string;
+  finding: string | null;
+  fix: string | null;
+  snippet: string | null;
+}
+
+export interface SkillsSkillEngine {
+  status: SkillsEngineStatus;
+  own_verdict: string | null;
+  duration_sec: number;
+  findings: number;
+  error: string | null;
+  warnings: string[];
+}
+
+export interface SkillsSkillResult {
+  name: string;
+  path: string;
+  verdict: SkillsVerdict;
+  verdict_reasons: string[];
+  complete: boolean;
+  summary: SkillsSummary;
+  engines: Record<string, SkillsSkillEngine>;
+  findings_omitted: number;
+  findings: SkillsFinding[];
+}
+
+export interface SkillsEngineTotal {
+  label: string;
+  version: string;
+  status: SkillsEngineStatus;
+  duration_sec: number;
+  llm: boolean;
+  error: string | null;
+  skills_failed: number;
+}
+
+export interface SkillsSource {
+  kind: "zip" | "repository";
+  // zip
+  asset_id?: number;
+  filename?: string;
+  sha256?: string;
+  size_bytes?: number;
+  // repository
+  git_repo_url?: string;
+  git_ref?: string | null;
+  commit?: string | null;
+}
+
+export interface SkillsScanResults {
+  engine: "skills-scanner";
+  source?: SkillsSource;
+  verdict: SkillsVerdict;
+  complete: boolean;
+  rejected: { reason: string; detail: string } | null;
+  llm: { enabled: boolean };
+  summary: SkillsSummary;
+  verdict_counts?: Record<SkillsVerdict, number>;
+  engines: Record<string, SkillsEngineTotal>;
+  warnings?: string[];
+  findings_truncated?: boolean;
+  skills: SkillsSkillResult[];
+}
+
 export interface ScanResults {
   vulnerability_results?: Array<{
     vulnerability: string;
