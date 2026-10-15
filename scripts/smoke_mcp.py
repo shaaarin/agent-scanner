@@ -125,7 +125,7 @@ def main():
     # Exercise existing branch upload/storage API and real MCPB source analysis.
     archive_data = io.BytesIO()
     with zipfile.ZipFile(archive_data, "w") as archive:
-        archive.writestr("manifest.json", json.dumps({"manifest_version": "0.3", "name": "mcp-smoke-fixture", "version": "1.0.0", "server": {"type": "python", "entry_point": "server.py"}}))
+        archive.writestr("manifest.json", json.dumps({"manifest_version": "0.3", "name": "mcp-smoke-fixture", "version": "1.0.0", "server": {"type": "python", "entry_point": "server.py", "mcp_config": {"command": "python", "args": ["server.py"]}}}))
         archive.writestr("server.py", VULNERABLE)
     boundary = "mcp-smoke-" + uuid.uuid4().hex
     body = ("--" + boundary + '\r\nContent-Disposition: form-data; name="file"; filename="fixture.mcpb"\r\nContent-Type: application/octet-stream\r\n\r\n').encode() + archive_data.getvalue() + ("\r\n--" + boundary + "--\r\n").encode()

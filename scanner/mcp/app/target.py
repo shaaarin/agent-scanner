@@ -80,22 +80,51 @@ def bundle_extract(c, root, code_only: bool):
     """Скачивает MCPB из control-api, проверяет и распаковывает в root.
     code_only=True -- только исходники для SAST; False -- весь архив для
     деплоя по манифесту. Возвращает разобранный manifest.json."""
-    import io
-    import zipfile
     from app.control_client import _client
     response = _client.get(f"/mcp-artifacts/{c['artifact_id']}/content")
     response.raise_for_status()
-    if len(response.content) > 50 * 1024 * 1024:
+    return extract_bundle_archive(response.content, root, code_only)
+
+
+def extract_bundle_archive(content: bytes, root: Path, code_only: bool):
+    """Validate metadata before selecting files, in both SAST and runtime modes."""
+    import io
+    import zipfile
+
+    if len(content) > 50 * 1024 * 1024:
         raise ValueError("MCPB превышает 50 МБ")
-    manifest = None
-    with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
+    try:
+        archive = zipfile.ZipFile(io.BytesIO(content))
+    except zipfile.BadZipFile as exc:
+        raise ValueError("Файл не является корректным MCPB/ZIP-архивом") from exc
+    with archive:
         infos = archive.infolist()
         if len(infos) > 5000 or sum(i.file_size for i in infos) > 250 * 1024 * 1024:
             raise ValueError("Превышен лимит распаковки MCPB")
+        # Check every entry, including files the SAST filter would skip,
+        # before writing anything into the extraction directory.
         for info in infos:
             path = Path(info.filename)
             if path.is_absolute() or ".." in path.parts or "\\" in info.filename or (info.external_attr >> 16) & 0o170000 == 0o120000:
                 raise ValueError("Небезопасный путь MCPB")
+
+        # manifest.json is metadata, not a source file. Read it independently
+        # of code_only, exactly as the upload API does.
+        try:
+            manifest_info = archive.getinfo("manifest.json")
+        except KeyError as exc:
+            raise ValueError("В корне MCPB отсутствует manifest.json") from exc
+        if manifest_info.file_size > 1024 * 1024:
+            raise ValueError("manifest.json превышает ограничение 1 МиБ")
+        try:
+            manifest = json.loads(archive.read(manifest_info))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError("manifest.json должен содержать корректный JSON") from exc
+        if not isinstance(manifest, dict):
+            raise ValueError("manifest.json должен содержать JSON-объект")
+
+        for info in infos:
+            path = Path(info.filename)
             if info.is_dir():
                 continue
             if code_only and path.suffix not in {".py", ".js", ".ts", ".tsx", ".jsx"}:
@@ -103,13 +132,6 @@ def bundle_extract(c, root, code_only: bool):
             dest = root / path
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_bytes(archive.read(info))
-            if info.filename == "manifest.json":
-                try:
-                    manifest = json.loads(dest.read_text())
-                except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-                    raise ValueError("manifest.json должен содержать корректный JSON") from exc
-    if not isinstance(manifest, dict):
-        raise ValueError("В корне MCPB отсутствует manifest.json")
     return manifest
 
 
