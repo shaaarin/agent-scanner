@@ -35,8 +35,10 @@ def _max_trials_default() -> int:
 def schema():
     """Описание полей конфига для динамической формы UI. Список payload'ов --
     атакующие промпты из payloads.yaml, ровно те имена, что фильтрует runner."""
+    from app import mutators
     from app.payloads import load_payloads
 
+    payloads = load_payloads()
     return {
         "type": "system_prompt_leak",
         "fields": [
@@ -46,8 +48,26 @@ def schema():
                 "type": "enum_multi",
                 "required": False,
                 "default": [],
-                "options": [{"value": payload["name"], "label": payload["name"]} for payload in load_payloads()],
-                "help": "Пусто — используются все промпты.",
+                "options": [
+                    {
+                        "value": payload["name"],
+                        "label": payload["name"]
+                        + (f" [{payload['family']}]" if payload.get("family") else "")
+                        + ("" if payload.get("source") == "bundled" else f" ({payload.get('source')})"),
+                    }
+                    for payload in payloads
+                ],
+                "help": "Пусто — используются все промпты (включая подключённые внешние наборы).",
+            },
+            {
+                "name": "mutators",
+                "label": "Мутаторы промптов",
+                "type": "enum_multi",
+                "required": False,
+                "default": list(mutators.DEFAULT_MUTATORS),
+                "options": mutators.options(),
+                "help": "Каждый мутатор даёт свой вариант атаки: промпты × мутаторы. "
+                "Пусто — только базовый текст без обёрток.",
             },
             {
                 "name": "repeats",

@@ -20,7 +20,7 @@ from urllib.parse import urlparse, urlunparse
 import httpx
 
 from app import control_client
-from app.payloads import load_payloads, new_canary
+from app.payloads import build_variants, load_payloads, new_canary
 from app.target import send_message
 
 LAUNCHER_URL = os.environ.get("LAUNCHER_URL", "http://launcher:8000")
@@ -240,11 +240,24 @@ def _run(scan_id: int, launched: list[bool]) -> None:
     payload_filter = set(config.get("payloads") or [])
     repeats = max(1, int(config.get("repeats") or 1))
     max_trials = int(config.get("max_trials") or _DEFAULT_MAX_TRIALS)
+    mutator_names = [str(m) for m in (config.get("mutators") or [])]
     payloads = [p for p in load_payloads() if not payload_filter or p["name"] in payload_filter]
     if not payloads:
         raise RuntimeError("не выбрано ни одного атакующего промпта")
+    try:
+        variants = build_variants(payloads, mutator_names)
+    except ValueError as exc:
+        raise RuntimeError(str(exc)) from exc
+    external = sorted({p["source"] for p in payloads if p.get("source") != "bundled"})
     _log(scan_id, f"Агент: {agent_config['name']} ({agent_config.get('interaction_mode')})", phase="Инициализация")
-    _log(scan_id, f"Атакующих промптов: {len(payloads)}, повторов: {repeats}, лимит прогонов: {max_trials}", phase="Инициализация")
+    _log(
+        scan_id,
+        f"Промптов: {len(payloads)}, мутаторов: {len(mutator_names) or 1}, вариантов атак: {len(variants)}; "
+        f"повторов: {repeats}, лимит прогонов: {max_trials}",
+        phase="Инициализация",
+    )
+    if external:
+        _log(scan_id, f"Подключены внешние наборы промптов: {', '.join(external)}", phase="Инициализация")
 
     _set_phase(scan_id, "Запуск агента")
     if agent_config.get("source") == "remote":
@@ -272,7 +285,7 @@ def _run(scan_id: int, launched: list[bool]) -> None:
     _set_phase(scan_id, "Тестирование")
     trials: list[dict] = []
     budget = max_trials
-    for payload in payloads:
+    for payload in variants:
         for _ in range(repeats):
             if budget <= 0:
                 _log(scan_id, f"Достигнут лимит прогонов ({max_trials}), тестирование остановлено", level="error", phase="Тестирование")

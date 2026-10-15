@@ -155,6 +155,11 @@ services:
     environment:
       CONTROL_API_URL: http://control-api:8000
       LAUNCHER_URL: http://launcher:8000
+      EXTRA_PAYLOADS_DIR: /payloads
+    volumes:
+      # Свои и сторонние наборы инъекций: YAML кладётся в payloads/indirect/
+      # и подхватывается на лету, как библиотека знаний (пересборка не нужна).
+      - ./payloads/indirect:/payloads:ro
     networks:
       - default
       - kind
@@ -170,6 +175,9 @@ services:
     environment:
       CONTROL_API_URL: http://control-api:8000
       LAUNCHER_URL: http://launcher:8000
+      EXTRA_PAYLOADS_DIR: /payloads
+    volumes:
+      - ./payloads/sysleak:/payloads:ro
     networks:
       - default
       - kind

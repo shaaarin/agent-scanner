@@ -224,6 +224,27 @@ def _build_callback(agent_config: dict):
     return build_model_callback(agent_config)
 
 
+def _turns_to_json(turns) -> list[dict]:
+    """Раунды многораундовой атаки DeepTeam -> простой JSON для выгрузки.
+    `turns` -- pydantic-модели, в `Scan.results` их нужно разложить."""
+    rows: list[dict] = []
+    for turn in turns or []:
+        role = getattr(turn, "role", None)
+        content = getattr(turn, "content", None)
+        if role is not None or content is not None:
+            rows.append({"role": str(role or "user"), "content": str(content or "")})
+            continue
+        # Старые версии складывают раунд парой input/actual_output.
+        payload = {}
+        for key in ("input", "actual_output"):
+            value = getattr(turn, key, None)
+            if value:
+                payload[key] = str(value)
+        if payload:
+            rows.append(payload)
+    return rows
+
+
 def results_to_payload(results: list) -> dict:
     """Maps DeepTeam `RTTestCase`s to the `ScanResults` shape the UI renders.
 
@@ -252,6 +273,14 @@ def results_to_payload(results: list) -> dict:
                 "error": str(error) if errored else None,
                 "score": score,
                 "reasoning": getattr(case, "reason", None) or error or "",
+                # Диалог кейса -- для выгрузки успешных атак
+                # (`GET /scans/{id}/export/attacks`): атакующий промпт, ответ
+                # агента и, если атака многораундовая, все раунды.
+                "input": getattr(case, "input", None) or "",
+                "actual_output": getattr(case, "actual_output", None) or "",
+                "turns": _turns_to_json(getattr(case, "turns", None)),
+                "risk_category": getattr(case, "risk_category", None) or "",
+                "cvss_score": getattr(case, "cvss_score", None),
             }
         )
 

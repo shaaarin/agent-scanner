@@ -22,7 +22,7 @@ from urllib.parse import urlparse, urlunparse
 import httpx
 
 from app import control_client
-from app.payloads import load_payloads, new_canary, render
+from app.payloads import build_text, build_variants, load_payloads, new_canary
 from app.target import send_message
 
 LAUNCHER_URL = os.environ.get("LAUNCHER_URL", "http://launcher:8000")
@@ -151,19 +151,24 @@ def _tool_calls_in_responses(events: list[dict]) -> list[dict]:
     return calls
 
 
-def _discover_injection_points(events: list[dict], allowed: list[str]) -> list[tuple[str, int]]:
-    """(инструмент, номер вызова) по базовому прогону. Инъекция подкладывается
-    в результат первого вызова каждого инструмента -- этого достаточно, чтобы
-    не раздувать число прогонов."""
-    seen: dict[str, int] = {}
-    points: list[tuple[str, int]] = []
+def _discover_injection_points(events: list[dict], allowed: list[str], occurrences: int = 1) -> list[tuple[str, int]]:
+    """(инструмент, номер вызова) по базовому прогону.
+
+    `occurrences` -- сколько вызовов каждого инструмента фаззить. По умолчанию
+    только первый: агент часто зовёт один инструмент несколько раз, и каждый
+    его вызов -- отдельная точка, но перебор по всем быстро раздувает число
+    прогонов. Больше 1 имеет смысл, когда важна инъекция в поздний вызов
+    (агент уже накопил контекст и доверяет данным сильнее)."""
+    counts: dict[str, int] = {}
     for call in _tool_calls_in_responses(events):
         name = call["name"]
         if not name or (allowed and name not in allowed):
             continue
-        if name not in seen:  # только первый вызов каждого инструмента
-            seen[name] = 1
-            points.append((name, 1))
+        counts[name] = counts.get(name, 0) + 1
+    points: list[tuple[str, int]] = []
+    for name, total in counts.items():
+        for occurrence in range(1, min(total, max(1, occurrences)) + 1):
+            points.append((name, occurrence))
     return points
 
 
@@ -325,12 +330,26 @@ def _run(scan_id: int, launched: list[bool]) -> None:
     payload_filter = set(config.get("payloads") or [])
     repeats = max(1, int(config.get("repeats") or 1))
     max_trials = int(config.get("max_trials") or _DEFAULT_MAX_TRIALS)
+    occurrences = max(1, int(config.get("occurrences") or 1))
+    mutator_names = [str(m) for m in (config.get("mutators") or [])]
 
     payloads = [p for p in load_payloads() if not payload_filter or p["name"] in payload_filter]
     if not payloads:
         raise RuntimeError("не выбрано ни одного payload'а")
+    try:
+        variants = build_variants(payloads, mutator_names)
+    except ValueError as exc:
+        raise RuntimeError(str(exc)) from exc
+    external = sorted({p["source"] for p in payloads if p.get("source") != "bundled"})
     _log(scan_id, f"Агент: {agent_config['name']} ({agent_config.get('interaction_mode')})", phase="Инициализация")
-    _log(scan_id, f"Задач: {len(tasks)}, payload'ов: {len(payloads)}, повторов: {repeats}, лимит прогонов: {max_trials}", phase="Инициализация")
+    _log(
+        scan_id,
+        f"Payload'ов: {len(payloads)}, мутаторов: {len(mutator_names) or 1}, вариантов инъекций: {len(variants)}; "
+        f"задач: {len(tasks)}, точек на инструмент: {occurrences}, повторов: {repeats}, лимит прогонов: {max_trials}",
+        phase="Инициализация",
+    )
+    if external:
+        _log(scan_id, f"Подключены внешние наборы payload'ов: {', '.join(external)}", phase="Инициализация")
 
     _set_phase(scan_id, "Запуск агента")
     if agent_config.get("source") == "remote":
@@ -366,23 +385,29 @@ def _run(scan_id: int, launched: list[bool]) -> None:
         baseline = _run_one_trial(scan_id, agent_config, baseline, task)
         baseline_response = baseline.get("agent_response") or ""
         events = control_client.list_trial_events(baseline["id"])
-        points = _discover_injection_points(events, target_tools)
+        points = _discover_injection_points(events, target_tools, occurrences)
         if not points:
             _log(scan_id, f"Задача {task_index + 1}: агент не вызвал инструментов — косвенную инъекцию подложить некуда, задача пропущена", level="error", phase="Базовый прогон")
             continue
-        _log(scan_id, f"Задача {task_index + 1}: найдены точки инъекции: {', '.join(name for name, _ in points)}", level="success", phase="Базовый прогон")
+        _log(
+            scan_id,
+            f"Задача {task_index + 1}: найдены точки инъекции: "
+            + ", ".join(f"{name} (вызов {occurrence})" for name, occurrence in points),
+            level="success",
+            phase="Базовый прогон",
+        )
 
-        # --- фаззинг: точка × payload × повтор ---
+        # --- фаззинг: точка × вариант инъекции × повтор ---
         _set_phase(scan_id, "Фаззинг")
         for tool_name, occurrence in points:
-            for payload in payloads:
+            for payload in variants:
                 for _ in range(repeats):
                     if trial_budget <= 0:
                         _log(scan_id, f"Достигнут лимит прогонов ({max_trials}), фаззинг остановлен", level="error", phase="Фаззинг")
                         break
                     trial_budget -= 1
                     canary = new_canary()
-                    text = render(payload["template"], canary=canary, tool_name=tool_name)
+                    text = build_text(payload, canary=canary, tool_name=tool_name)
                     trial = control_client.create_trial(
                         scan_id,
                         {

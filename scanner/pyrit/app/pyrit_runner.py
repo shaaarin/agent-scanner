@@ -225,6 +225,7 @@ async def _run_attacks_async(
         on_log("info", f"Цель: {objective}")
         for label, attack in attacks:
             row_label = f"{objective} / {label}"
+            mark = target.begin_capture()
             try:
                 result = await attack.execute_async(
                     objective=objective,
@@ -247,6 +248,7 @@ async def _run_attacks_async(
                     # итоговую долю не попадает (как errored-кейсы DeepTeam).
                     passed, errored, score = False, True, 0.0
                     on_log("error", f"{label}: не оценено ({outcome}): {error_message or reason}")
+                turns = target.end_capture(mark)
                 rows.append(
                     {
                         "vulnerability": row_label,
@@ -255,6 +257,11 @@ async def _run_attacks_async(
                         "error": (error_message or (reason if errored else "")) or None,
                         "score": score,
                         "reasoning": (rationale or reason or error_message)[:2000],
+                        # Диалог атаки -- для выгрузки успешных атак
+                        # (`GET /scans/{id}/export/attacks`).
+                        "input": next((t["content"] for t in turns if t["role"] == "user"), objective),
+                        "actual_output": next((t["content"] for t in reversed(turns) if t["role"] == "assistant"), ""),
+                        "turns": turns,
                     }
                 )
             except Exception as exc:  # noqa: BLE001 -- одна атака не должна ронять скан
@@ -267,6 +274,9 @@ async def _run_attacks_async(
                         "error": message,
                         "score": 0.0,
                         "reasoning": message[:2000],
+                        "input": objective,
+                        "actual_output": "",
+                        "turns": target.end_capture(mark),
                     }
                 )
                 on_log("error", f"{label}: {message}")

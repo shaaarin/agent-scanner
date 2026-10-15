@@ -40,5 +40,9 @@ function makeClient(baseUrl: string) {
   };
 }
 
-export const api = makeClient(import.meta.env.VITE_CONTROL_API_URL ?? "http://localhost:8000");
+// Базовый URL нужен не только клиенту: выгрузки (SARIF, диалоги атак)
+// открываются прямой ссылкой на эндпоинт, чтобы браузер скачал файл сам.
+export const CONTROL_API_URL = import.meta.env.VITE_CONTROL_API_URL ?? "http://localhost:8000";
+
+export const api = makeClient(CONTROL_API_URL);
 export const launcherApi = makeClient(import.meta.env.VITE_LAUNCHER_URL ?? "http://localhost:8400");
