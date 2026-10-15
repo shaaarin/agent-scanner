@@ -47,6 +47,7 @@ class ScanContext:
     max_skills: int
     log: Callable[..., None]
     # Заполняют этапы.
-    skills: list[dict] = field(default_factory=list)
+    source_meta: dict = field(default_factory=dict)  # что именно сканировали: sha256/размер или коммит
+    skills: list[dict] = field(default_factory=list)  # [{"name", "path", "dir": Path}]
     engine_runs: dict = field(default_factory=dict)
     rejected: Optional[dict] = None

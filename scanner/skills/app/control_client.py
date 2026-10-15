@@ -1,7 +1,9 @@
 """Синхронный клиент к control-api. Своя копия по образцу
 `scanner/semgrep/app/control_client.py` -- общий код между сканерами не
 выносится, у каждого свой."""
+import hashlib
 import os
+from pathlib import Path
 
 import httpx
 
@@ -20,6 +22,25 @@ def list_scans(*, status: str, scan_type: str) -> list[dict]:
     resp = _client.get("/scans", params={"status": status, "scan_type": scan_type})
     resp.raise_for_status()
     return resp.json()
+
+
+def download_skill_archive(asset_id: int, dest: Path, *, max_bytes: int) -> tuple[str, int]:
+    """Скачивает zip skill-актива (`GET /skill-assets/{id}/content`) потоком в
+    `dest`, не больше `max_bytes`. Возвращает (sha256, размер)."""
+    digest = hashlib.sha256()
+    size = 0
+    with _client.stream("GET", f"/skill-assets/{asset_id}/content", timeout=120.0) as resp:
+        if resp.status_code == 404:
+            raise RuntimeError("архив skill-актива не найден в control-api (актив удалён?)")
+        resp.raise_for_status()
+        with dest.open("wb") as out:
+            for chunk in resp.iter_bytes():
+                size += len(chunk)
+                if size > max_bytes:
+                    raise RuntimeError(f"архив больше {max_bytes // (1024 * 1024)} МиБ")
+                digest.update(chunk)
+                out.write(chunk)
+    return digest.hexdigest(), size
 
 
 def patch_scan(scan_id: int, payload: dict) -> dict:

@@ -10,7 +10,7 @@ import pytest
 from app import runner, stages
 from app.context import ScanContext
 
-from conftest import ZIP_SOURCE
+from conftest import ZIP_SOURCE, make_zip, skill_md, zip_source
 
 REPO_SOURCE = {
     "kind": "repository",
@@ -100,15 +100,18 @@ def test_describe_source_hides_token():
 
 
 def test_unimplemented_stage_fails_honestly(api):
-    api.add_scan(1)
+    content = make_zip({"demo/SKILL.md": skill_md("demo")})
+    api.archives[1] = content
+    api.add_scan(1, config=json.dumps({"source": zip_source(content)}))
     runner.run_scan(1)
     scan = api.scans[1]
     assert scan["status"] == "failed"
     assert scan["phase"] == "Ошибка"
-    assert scan["error"] == "Получение исходников ещё не реализовано в этой версии scanner-skills"
+    assert scan["error"] == "Статический анализ ещё не реализован в этой версии scanner-skills"
     assert json.loads(scan["results"]) == {"error": scan["error"]}
     assert scan["finished_at"]
-    assert api.phases(1) == ["Инициализация", "Получение исходников", "Ошибка"]
+    assert api.phases(1) == ["Инициализация", "Получение исходников", "Статический анализ", "Ошибка"]
+    assert any(m.startswith("Найдено скиллов: 1: demo (demo)") for m in api.messages(1))
     assert not runner.is_running(1)
 
 

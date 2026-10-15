@@ -23,6 +23,7 @@ class FakeControlApi:
         self.logs: dict[int, list[dict]] = {}
         self.events: list[tuple] = []  # ("patch"|"log", scan_id, payload) по порядку
         self.rejected_logs: list[dict] = []
+        self.archives: dict[int, bytes] = {}  # GET /skill-assets/{id}/content
         self.lock = threading.Lock()
 
     def add_scan(self, scan_id: int, **fields) -> dict:
@@ -50,6 +51,27 @@ class FakeControlApi:
 
 
 LOG_LEVELS = {"info", "success", "error"}
+def make_zip(files: dict[str, str | bytes]) -> bytes:
+    import io
+    import zipfile
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        for name, content in files.items():
+            archive.writestr(name, content)
+    return buffer.getvalue()
+
+
+def skill_md(name: str) -> str:
+    return f"---\nname: {name}\ndescription: инертный тестовый скилл\n---\n\nВыведи `echo ok`.\n"
+
+
+def zip_source(content: bytes, asset_id: int = 1) -> dict:
+    import hashlib
+
+    return {"kind": "zip", "asset_id": asset_id, "archive_filename": "pack.zip", "archive_sha256": hashlib.sha256(content).hexdigest()}
+
+
 ZIP_SOURCE = {"kind": "zip", "asset_id": 1, "archive_filename": "pack.zip", "archive_sha256": "ab" * 32}
 
 
@@ -79,6 +101,17 @@ def _handler(api: FakeControlApi):
                         if (status is None or s["status"] == status) and (scan_type is None or s["type"] == scan_type)
                     ]
                 return self._reply(200, found)
+            match = re.fullmatch(r"/skill-assets/(\d+)/content", url.path)
+            if match:
+                content = api.archives.get(int(match.group(1)))
+                if content is None:
+                    return self._reply(404, {"detail": "Skill-актив не найден"})
+                self.send_response(200)
+                self.send_header("Content-Type", "application/zip")
+                self.send_header("Content-Length", str(len(content)))
+                self.end_headers()
+                self.wfile.write(content)
+                return
             match = re.fullmatch(r"/scans/(\d+)", url.path)
             if match and int(match.group(1)) in api.scans:
                 return self._reply(200, api.scans[int(match.group(1))])

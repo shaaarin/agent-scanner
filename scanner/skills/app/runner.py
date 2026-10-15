@@ -2,7 +2,8 @@
 
     0. В очереди               -- если уже идут SCAN_MAX_CONCURRENT сканов (D-27)
     1. Инициализация           -- скан, проверка конфига: движки, источник (D-46)
-    2. Получение исходников    -- zip или git, распаковка, поиск скиллов (stages)
+    2. Получение исходников    -- zip или git, распаковка, поиск скиллов (sources);
+                                  архив с признаками атаки -- сразу к п. 4, block
     3. Статический анализ      -- движки по каждому скиллу (stages)
     4. Сохранение результатов  -- Scan.results, статус completed
 
@@ -21,7 +22,7 @@ from pathlib import Path
 
 import httpx
 
-from app import control_client, stages
+from app import control_client, report, stages
 from app.context import Deadline, ScanContext
 
 SCAN_TYPE = "agent_skills"
@@ -244,18 +245,25 @@ def _run(scan_id: int) -> None:
         stages.fetch_sources(ctx)
         deadline.check()
 
-        _set_phase(scan_id, "Статический анализ")
-        stages.analyze(ctx)
-        deadline.check()
+        if ctx.rejected:
+            # Признак атаки в архиве: движки не запускаем, результат -- block (D-21).
+            _set_phase(scan_id, "Сохранение результатов")
+            payload = report.rejected_results(ctx)
+            final_message = f"Архив отклонён, вердикт block: {ctx.rejected['detail']}"
+        else:
+            _set_phase(scan_id, "Статический анализ")
+            stages.analyze(ctx)
+            deadline.check()
 
-        _set_phase(scan_id, "Сохранение результатов")
-        payload = stages.build_results(ctx)
+            _set_phase(scan_id, "Сохранение результатов")
+            payload = stages.build_results(ctx)
+            final_message = "Анализ навыков завершён"
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
 
     # Последняя строка журнала -- до смены статуса: страница скана перестаёт
     # опрашивать журнал, как только видит completed.
-    _log(scan_id, "Анализ навыков завершён", level="success", phase="Завершено")
+    _log(scan_id, final_message, level="success", phase="Завершено")
     control_client.patch_scan(
         scan_id,
         {
