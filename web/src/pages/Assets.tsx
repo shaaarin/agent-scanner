@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { api, launcherApi } from "../api/client";
 import type {
   AssetKind,
@@ -11,6 +11,8 @@ import type {
 } from "../api/types";
 import { PageHeader } from "../components/PageHeader";
 import { AgentConfigs } from "./AgentConfigs";
+import { AssetActions } from "../components/AssetActions";
+import { McpAssetEditor } from "../components/McpAssetEditor";
 
 // Раздел «Активы»: агенты / MCP / skills. Актив -- сущность, внутри которой
 // создаются сканирования (см. AssetDetail). Вкладка «Агенты» переиспользует
@@ -32,7 +34,7 @@ export function Assets() {
         title="Активы"
         description="То, что вы проверяете: агенты, MCP-серверы и skills. Выберите актив, чтобы создать для него сканирование."
       />
-      <div style={{ display: "flex", gap: "0.5rem", marginBottom: "1.5rem" }}>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", marginBottom: "1.5rem" }}>
         {TABS.map((item) => (
           <button
             key={item.key}
@@ -66,7 +68,7 @@ function mcpAssetLabels(asset: McpAsset): { code: boolean; live: boolean } {
 
 function AssetLabels({ labels }: { labels: { code: boolean; live: boolean } }) {
   return (
-    <span style={{ display: "inline-flex", gap: "0.4rem", marginLeft: "0.5rem" }}>
+    <span className="asset-labels">
       {labels.code && <span className="badge badge-neutral">есть код</span>}
       {labels.live && <span className="badge badge-success">живой сервис</span>}
     </span>
@@ -79,10 +81,10 @@ function repoNameFromUrl(url: string): string {
 }
 
 function McpAssetsTab() {
-  const navigate = useNavigate();
   const [assets, setAssets] = useState<McpAsset[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
+  const [editing, setEditing] = useState<McpAsset | null>(null);
 
   const load = () => api.get<McpAsset[]>("/mcp-assets").then(setAssets).catch((e) => setError(String(e)));
   useEffect(() => {
@@ -102,9 +104,9 @@ function McpAssetsTab() {
 
   return (
     <div>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem" }}>
+      <div className="section-heading">
         <h2 style={{ margin: 0 }}>MCP-активы</h2>
-        <button className="btn" onClick={() => (showForm ? setShowForm(false) : setShowForm(true))}>
+        <button className="btn" onClick={() => {setEditing(null); setShowForm(!showForm);}}>
           {showForm ? "Отмена" : "+ Добавить MCP-актив"}
         </button>
       </div>
@@ -121,7 +123,8 @@ function McpAssetsTab() {
           }}
         />
       )}
-      <div className="card" style={{ padding: 0, overflow: "hidden" }}>
+      {editing && <McpAssetEditor key={editing.id} asset={editing} onCancel={() => setEditing(null)} onSaved={() => {setEditing(null); load();}} />}
+      <div className="card data-table-card">
         {assets.length === 0 ? (
           <div style={{ padding: "3.2rem", textAlign: "center" }}>
             <p style={{ margin: 0, color: "var(--text-700)", fontWeight: 500 }}>Пока нет ни одного MCP-актива</p>
@@ -130,35 +133,36 @@ function McpAssetsTab() {
             </p>
           </div>
         ) : (
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+          <table className="data-table data-table--assets" aria-label="MCP-активы">
+            <colgroup><col /><col /><col /><col /></colgroup>
             <thead>
               <tr style={{ borderBottom: "0.1rem solid var(--separator-default)" }}>
-                <th style={{ padding: "1rem", textAlign: "left", width: "100%" }}>Название</th>
-                <th style={{ padding: "1rem", textAlign: "left" }}>Источник</th>
-                <th style={{ padding: "1rem", textAlign: "left" }}>Создан</th>
-                <th style={{ padding: "1rem", textAlign: "right" }}>Действия</th>
+                <th scope="col">Название</th>
+                <th scope="col">Источник</th>
+                <th scope="col">Создан</th>
+                <th scope="col">Действия</th>
               </tr>
             </thead>
             <tbody>
               {assets.map((asset) => (
                 <tr key={asset.id} style={{ borderBottom: "0.1rem solid var(--separator-default)" }}>
-                  <td style={{ padding: "1rem" }}>
-                    <button className="btn btn-sm btn-secondary" onClick={() => navigate(`/assets/mcp/${asset.id}`)}>
+                  <td data-label="Название">
+                    <div className="table-name">
+                    <Link className="table-name-link" to={`/assets/mcp/${asset.id}`}>
                       {asset.name}
-                    </button>
+                    </Link>
                     <AssetLabels labels={mcpAssetLabels(asset)} />
                     {asset.description && (
                       <div style={{ color: "var(--text-500)", fontSize: 12, marginTop: "0.3rem" }}>{asset.description}</div>
                     )}
+                    </div>
                   </td>
-                  <td style={{ padding: "1rem" }}>
-                    <span className="badge badge-neutral">{TARGET_KIND_LABELS[asset.config.kind] ?? asset.config.kind}</span>
+                  <td data-label="Источник">
+                    <span>{TARGET_KIND_LABELS[asset.config.kind] ?? asset.config.kind}</span>
                   </td>
-                  <td style={{ padding: "1rem" }}>{new Date(asset.created_at).toLocaleString("ru-RU")}</td>
-                  <td style={{ padding: "1rem", textAlign: "right" }}>
-                    <button className="btn btn-sm btn-danger" onClick={() => handleDelete(asset.id)}>
-                      Удалить
-                    </button>
+                  <td data-label="Создан">{new Date(asset.created_at).toLocaleString("ru-RU")}</td>
+                  <td data-label="Действия">
+                    <AssetActions onEdit={() => {setShowForm(false); setError(null); setEditing(asset);}} onDelete={() => handleDelete(asset.id)} />
                   </td>
                 </tr>
               ))}
@@ -637,10 +641,10 @@ function McpAssetWizard({ onCreated }: { onCreated: () => void }) {
 }
 
 function SkillsAssetsTab() {
-  const navigate = useNavigate();
   const [assets, setAssets] = useState<SkillAsset[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
+  const [editing, setEditing] = useState<SkillAsset | null>(null);
 
   const load = () => api.get<SkillAsset[]>("/skill-assets").then(setAssets).catch((e) => setError(String(e)));
   useEffect(() => {
@@ -660,10 +664,10 @@ function SkillsAssetsTab() {
 
   return (
     <div>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem" }}>
+      <div className="section-heading">
         <h2 style={{ margin: 0 }}>Skill-активы</h2>
-        <button className="btn btn-primary" onClick={() => setShowForm(true)}>
-          + Добавить Skills
+        <button className="btn btn-primary" onClick={() => {setEditing(null); setShowForm(!showForm);}}>
+          {showForm ? "Отмена" : "+ Добавить Skills"}
         </button>
       </div>
       {error && (
@@ -671,7 +675,19 @@ function SkillsAssetsTab() {
           <span style={{ color: "var(--danger)" }}>{error}</span>
         </div>
       )}
-      <div className="card" style={{ padding: 0, overflow: "hidden" }}>
+      {showForm && (
+        <SkillAssetForm
+          key={editing?.id ?? "new"}
+          asset={editing ?? undefined}
+          onClose={() => {setShowForm(false); setEditing(null);}}
+          onCreated={() => {
+            setShowForm(false);
+            setEditing(null);
+            load();
+          }}
+        />
+      )}
+      <div className="card data-table-card">
         {assets.length === 0 ? (
           <div style={{ padding: "3.2rem", textAlign: "center" }}>
             <p style={{ margin: 0, color: "var(--text-700)", fontWeight: 500 }}>Пока нет ни одного skill-актива</p>
@@ -680,35 +696,31 @@ function SkillsAssetsTab() {
             </p>
           </div>
         ) : (
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+          <table className="data-table data-table--assets" aria-label="Skill-активы">
+            <colgroup><col /><col /><col /><col /></colgroup>
             <thead>
               <tr style={{ borderBottom: "0.1rem solid var(--separator-default)" }}>
-                <th style={{ padding: "1rem", textAlign: "left", width: "100%" }}>Название</th>
-                <th style={{ padding: "1rem", textAlign: "left" }}>Источник</th>
-                <th style={{ padding: "1rem", textAlign: "left" }}>Создан</th>
-                <th style={{ padding: "1rem", textAlign: "right" }}>Действия</th>
+                <th scope="col">Название</th><th scope="col">Источник</th><th scope="col">Создан</th><th scope="col">Действия</th>
               </tr>
             </thead>
             <tbody>
               {assets.map((asset) => (
                 <tr key={asset.id} style={{ borderBottom: "0.1rem solid var(--separator-default)" }}>
-                  <td style={{ padding: "1rem" }}>
-                    <button className="btn btn-sm btn-secondary" onClick={() => navigate(`/assets/skill/${asset.id}`)}>
+                  <td data-label="Название"><div className="table-name">
+                    <Link className="table-name-link" to={`/assets/skill/${asset.id}`}>
                       {asset.name}
-                    </button>
-                    <span className="badge badge-neutral" style={{ marginLeft: "0.5rem" }}>есть код</span>
+                    </Link>
+                    <span className="asset-labels"><span className="badge badge-neutral">есть код</span></span>
                     {asset.description && (
                       <div style={{ color: "var(--text-500)", fontSize: 12, marginTop: "0.3rem" }}>{asset.description}</div>
                     )}
+                  </div></td>
+                  <td data-label="Источник">
+                    {asset.source === "zip" ? "ZIP-архив" : "Git-репозиторий"}
                   </td>
-                  <td style={{ padding: "1rem" }}>
-                    <span className="badge badge-neutral">{asset.source === "zip" ? "ZIP-архив" : "Git-репозиторий"}</span>
-                  </td>
-                  <td style={{ padding: "1rem" }}>{new Date(asset.created_at).toLocaleString("ru-RU")}</td>
-                  <td style={{ padding: "1rem", textAlign: "right" }}>
-                    <button className="btn btn-sm btn-danger" onClick={() => handleDelete(asset.id)}>
-                      Удалить
-                    </button>
+                  <td data-label="Создан">{new Date(asset.created_at).toLocaleString("ru-RU")}</td>
+                  <td data-label="Действия">
+                    <AssetActions onEdit={() => {setEditing(asset); setShowForm(true); setError(null);}} onDelete={() => handleDelete(asset.id)} />
                   </td>
                 </tr>
               ))}
@@ -716,38 +728,36 @@ function SkillsAssetsTab() {
           </table>
         )}
       </div>
-      {showForm && (
-        <SkillAssetForm
-          onClose={() => setShowForm(false)}
-          onCreated={() => {
-            setShowForm(false);
-            load();
-          }}
-        />
-      )}
     </div>
   );
 }
 
-function SkillAssetForm({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
-  const [name, setName] = useState("");
-  const [description, setDescription] = useState("");
-  const [source, setSource] = useState<"repository" | "zip">("repository");
-  const [gitRepoUrl, setGitRepoUrl] = useState("");
-  const [gitRef, setGitRef] = useState("main");
+function SkillAssetForm({ asset, onClose, onCreated }: { asset?: SkillAsset; onClose: () => void; onCreated: () => void }) {
+  const [name, setName] = useState(asset?.name ?? "");
+  const [description, setDescription] = useState(asset?.description ?? "");
+  const [source, setSource] = useState<"repository" | "zip">(asset?.source ?? "repository");
+  const [gitRepoUrl, setGitRepoUrl] = useState(asset?.git_repo_url ?? "");
+  const [gitRef, setGitRef] = useState(asset?.git_ref ?? "main");
   const [gitAccessToken, setGitAccessToken] = useState("");
+  const [clearToken, setClearToken] = useState(false);
   const [file, setFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const canCreate = Boolean(name.trim()) && (source === "repository" ? Boolean(gitRepoUrl.trim()) : Boolean(file));
+  const canCreate = Boolean(name.trim()) && (source === "repository" ? Boolean(gitRepoUrl.trim()) : Boolean(asset || file));
 
   const submit = async () => {
     if (!canCreate) return;
     setBusy(true);
     setError(null);
     try {
-      if (source === "repository") {
+      if (asset) {
+        await api.put(`/skill-assets/${asset.id}`, {
+          name: name.trim(), description: description.trim() || null,
+          ...(source === "repository" && {git_repo_url: gitRepoUrl.trim(), git_ref: gitRef.trim() || "main",
+            ...(clearToken ? {git_access_token: null} : gitAccessToken ? {git_access_token: gitAccessToken} : {})}),
+        });
+      } else if (source === "repository") {
         await api.post<SkillAsset>("/skill-assets", {
           name: name.trim(),
           description: description.trim() || null,
@@ -772,41 +782,26 @@ function SkillAssetForm({ onClose, onCreated }: { onClose: () => void; onCreated
   };
 
   return (
-    <div
-      style={{
-        position: "fixed",
-        top: 0,
-        left: 0,
-        right: 0,
-        bottom: 0,
-        background: "rgba(0,0,0,0.5)",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        zIndex: 1000,
-        padding: "2rem",
-      }}
-      onClick={onClose}
+    <form
+      className="card asset-edit-form"
+      aria-label={asset ? "Редактирование skill-актива" : "Новый skill-актив"}
+      style={{ padding: "2rem", minWidth: 0 }}
+      onSubmit={(e) => { e.preventDefault(); void submit(); }}
     >
-      <div
-        className="card"
-        style={{ padding: "2rem", minWidth: "460px", maxWidth: "620px", maxHeight: "90vh", overflow: "auto", width: "100%" }}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <h2 style={{ marginBottom: "1rem" }}>Новый skill-актив</h2>
+        <h2 style={{ marginBottom: "1rem" }}>{asset ? "Изменить skill-актив" : "Новый skill-актив"}</h2>
         <div style={{ marginBottom: "1rem" }}>
           <label style={{ display: "block", marginBottom: "0.5rem" }}>
             Название<span style={{ color: "var(--danger)" }}> *</span>
           </label>
-          <input className="input" style={{ width: "100%" }} value={name} onChange={(e) => setName(e.target.value)} placeholder="Например: навыки поддержки" />
+          <input aria-label="Название" className="input" style={{ width: "100%" }} value={name} onChange={(e) => setName(e.target.value)} placeholder="Например: навыки поддержки" />
         </div>
         <div style={{ marginBottom: "1rem" }}>
           <label style={{ display: "block", marginBottom: "0.5rem" }}>Описание</label>
-          <input className="input" style={{ width: "100%" }} value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Необязательно" />
+          <input aria-label="Описание" className="input" style={{ width: "100%" }} value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Необязательно" />
         </div>
         <div style={{ marginBottom: "1rem" }}>
           <label style={{ display: "block", marginBottom: "0.5rem" }}>Источник</label>
-          <select className="input" style={{ width: "100%" }} value={source} onChange={(e) => setSource(e.target.value as "repository" | "zip")}>
+          <select aria-label="Источник" className="input" style={{ width: "100%" }} value={source} disabled={Boolean(asset)} onChange={(e) => setSource(e.target.value as "repository" | "zip")}>
             <option value="repository">Git-репозиторий</option>
             <option value="zip">ZIP-архив</option>
           </select>
@@ -816,34 +811,34 @@ function SkillAssetForm({ onClose, onCreated }: { onClose: () => void; onCreated
           <>
             <div style={{ marginBottom: "1rem" }}>
               <label style={{ display: "block", marginBottom: "0.5rem" }}>URL Git-репозитория</label>
-              <input type="url" className="input" style={{ width: "100%" }} value={gitRepoUrl} onChange={(e) => setGitRepoUrl(e.target.value)} placeholder="https://github.com/org/skills.git" />
+              <input aria-label="URL Git-репозитория" type="url" className="input" style={{ width: "100%" }} value={gitRepoUrl} onChange={(e) => setGitRepoUrl(e.target.value)} placeholder="https://github.com/org/skills.git" />
             </div>
             <div style={{ marginBottom: "1rem" }}>
               <label style={{ display: "block", marginBottom: "0.5rem" }}>Ветка, тег или commit</label>
-              <input className="input" style={{ width: "100%" }} value={gitRef} onChange={(e) => setGitRef(e.target.value)} />
+              <input aria-label="Ветка, тег или commit" className="input" style={{ width: "100%" }} value={gitRef} onChange={(e) => setGitRef(e.target.value)} />
             </div>
             <div style={{ marginBottom: "1rem" }}>
               <label style={{ display: "block", marginBottom: "0.5rem" }}>Токен доступа к Git</label>
-              <input type="password" className="input" style={{ width: "100%" }} value={gitAccessToken} onChange={(e) => setGitAccessToken(e.target.value)} placeholder="Необязательно, для приватного репозитория" autoComplete="off" />
+              <input aria-label="Токен доступа к Git" type="password" className="input" style={{ width: "100%" }} value={gitAccessToken} onChange={(e) => setGitAccessToken(e.target.value)} placeholder={asset ? "Пусто — сохранить прежний токен" : "Необязательно, для приватного репозитория"} disabled={clearToken} autoComplete="off" />
+              {asset && <label className="checkbox-setting"><input type="checkbox" checked={clearToken} onChange={e => setClearToken(e.target.checked)} />Удалить сохранённый токен</label>}
             </div>
           </>
         ) : (
           <div style={{ marginBottom: "1rem" }}>
             <label style={{ display: "block", marginBottom: "0.5rem" }}>ZIP-архив</label>
-            <input type="file" accept=".zip,application/zip" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
+            {asset ? <p>{asset.archive_filename} · архив сохраняется при редактировании имени и описания.</p> : <input type="file" accept=".zip,application/zip" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />}
           </div>
         )}
 
         {error && (
           <p role="alert" style={{ color: "var(--danger)", fontSize: 13 }}>{error}</p>
         )}
-        <div style={{ display: "flex", gap: "0.6rem", justifyContent: "flex-end", marginTop: "1.5rem" }}>
-          <button className="btn btn-secondary" onClick={onClose} disabled={busy}>Отмена</button>
-          <button className="btn btn-primary" onClick={submit} disabled={busy || !canCreate}>
-            {busy ? "Сохранение…" : "Создать актив"}
+        <div className="asset-form-actions">
+          <button type="button" className="btn btn-secondary" onClick={onClose} disabled={busy}>Отмена</button>
+          <button type="submit" className="btn btn-primary" disabled={busy || !canCreate}>
+            {busy ? "Сохранение…" : asset ? "Сохранить изменения" : "Создать актив"}
           </button>
         </div>
-      </div>
-    </div>
+    </form>
   );
 }

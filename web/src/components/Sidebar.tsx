@@ -1,15 +1,6 @@
 import { NavLink } from "react-router-dom";
-import { Icon, type IconName } from "./Icon";
-
-const items: { to: string; label: string; icon: IconName; end?: boolean }[] = [
-  { to: "/", label: "Главная", icon: "home", end: true },
-  { to: "/assets", label: "Активы", icon: "agent" },
-  { to: "/scans", label: "Сканирования", icon: "scans" },
-  { to: "/llm-models", label: "LLM-модели", icon: "llm" },
-  { to: "/library", label: "Библиотека знаний", icon: "library" },
-  { to: "/help", label: "Справка", icon: "library" },
-  { to: "/events", label: "События", icon: "events" },
-];
+import { Icon } from "./Icon";
+import { navigation } from "../navigation";
 
 export function Sidebar() {
   return (
@@ -64,6 +55,7 @@ export function Sidebar() {
       </NavLink>
 
       <nav
+        aria-label="Основная навигация"
         style={{
           display: "flex",
           flexDirection: "column",
@@ -73,7 +65,7 @@ export function Sidebar() {
           flex: 1,
         }}
       >
-        {items.map((item) => (
+        {navigation.map((item) => (
           <div key={item.to} className="sidebar-item" style={{ position: "relative" }}>
             <NavLink
               to={item.to}
@@ -138,7 +130,8 @@ export function Sidebar() {
           line-height: var(--font-caption-s-line);
           box-shadow: 0 0.4rem 1.6rem 0 var(--shadow-2);
         }
-        .sidebar-item:hover .sidebar-flyout {
+        .sidebar-item:hover .sidebar-flyout,
+        .sidebar-item:focus-within .sidebar-flyout {
           opacity: 1;
           pointer-events: auto;
           transform: translateY(-50%) translateX(0);

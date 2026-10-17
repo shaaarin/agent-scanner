@@ -129,6 +129,8 @@ export interface Asset {
 export interface McpDeploySettings {
   port?: number | null;
   command?: string | null;
+  dockerfile_path?: string | null;
+  mcp_path?: string | null;
   env: Record<string, string>;
 }
 

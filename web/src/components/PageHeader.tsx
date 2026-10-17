@@ -16,6 +16,7 @@ export function PageHeader({
           display: "flex",
           justifyContent: "space-between",
           alignItems: "flex-start",
+          flexWrap: "wrap",
           gap: "1.6rem",
           marginBottom: description ? "0.6rem" : 0,
         }}
@@ -23,6 +24,9 @@ export function PageHeader({
         <h1
           style={{
             margin: 0,
+            minWidth: 0,
+            flex: "1 1 24rem",
+            overflowWrap: "anywhere",
             fontSize: "var(--font-header-m-size)",
             lineHeight: "var(--font-header-m-line)",
             fontWeight: 700,
@@ -32,7 +36,7 @@ export function PageHeader({
         >
           {title}
         </h1>
-        {actions && <div style={{ flexShrink: 0, paddingTop: "0.4rem" }}>{actions}</div>}
+        {actions && <div className="page-header-actions">{actions}</div>}
       </div>
       {description && (
         <p

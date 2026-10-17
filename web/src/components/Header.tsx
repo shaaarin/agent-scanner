@@ -1,18 +1,9 @@
 import { useLocation } from "react-router-dom";
-
-const SECTION_LABELS: [string, string, boolean][] = [
-  ["/help", "Справка", false],
-  ["/assets", "Активы", false],
-  ["/scans", "Сканирования", false],
-  ["/llm-models", "LLM-модели", false],
-  ["/library", "Библиотека знаний", false],
-  ["/events", "События", false],
-  ["/", "Главная", true],
-];
+import { navigation } from "../navigation";
 
 function getLabel(pathname: string): string {
-  for (const [path, label, exact] of SECTION_LABELS) {
-    if (exact ? pathname === path : pathname.startsWith(path)) return label;
+  for (const item of navigation) {
+    if (pathname === item.to || (!item.end && pathname.startsWith(`${item.to}/`))) return item.label;
   }
   return "Agent Scanner";
 }
@@ -23,12 +14,12 @@ export function Header() {
 
   return (
     <header
+      className="app-header"
       style={{
         gridArea: "header",
         display: "flex",
         alignItems: "center",
         height: "var(--header-height)",
-        padding: "0 3.2rem",
         background: "var(--background-base)",
         borderBottom: "0.1rem solid var(--separator-default)",
         zIndex: 20,
@@ -48,6 +39,7 @@ export function Header() {
       </span>
 
       <span
+        className="app-environment"
         style={{
           display: "inline-flex",
           alignItems: "center",
