@@ -65,7 +65,7 @@ export function McpAssetEditor({asset, onSaved, onCancel}: {asset: McpAsset; onS
     event.preventDefault(); setBusy(true); setError(null);
     try {
       let config = {...target};
-      if (config.kind === "remote") config = {...config, headers: objectValue(headers, "Заголовки", true) as Record<string, string>};
+      if (config.kind === "remote") config = {...config, headers: objectValue(headers, "Заголовки", true) as Record<string, string>, verify_tls: true};
       if (config.kind === "repository") config = {...config, env: objectValue(env, "Окружение", true) as Record<string, string>};
       if (config.kind === "bundle") config = {...config, user_config: objectValue(userConfig, "Настройки MCPB")};
       const deploy = target.kind === "remote" ? asset.deploy : !deployEnabled ? null : {
@@ -88,10 +88,10 @@ export function McpAssetEditor({asset, onSaved, onCancel}: {asset: McpAsset; onS
       {target.kind === "remote" && <>
         <label className="field">Адрес MCP-сервера<input type="url" required value={target.server_url} onChange={e => setTarget({...target, server_url: e.target.value})} /></label>
         <label className="field">Транспорт MCP<select aria-label="Транспорт MCP" value={target.transport} onChange={e => setTarget({...target, transport: e.target.value as MCPTransport})}>
-          <option value="auto">Автоопределение</option><option value="streamable_http">Streamable HTTP</option><option value="sse">Legacy SSE</option>
+          <option value="auto">По умолчанию (Streamable HTTP)</option><option value="streamable_http">Streamable HTTP</option><option value="sse">Legacy SSE</option>
         </select></label>
         <JsonSetting label="Заголовки авторизации и дополнительные заголовки (JSON)" value={headers} onChange={setHeaders} />
-        <label className="checkbox-setting"><input type="checkbox" checked={target.verify_tls} onChange={e => setTarget({...target, verify_tls: e.target.checked})} />Проверять TLS-сертификат</label>
+        <p>Для HTTPS проверка TLS-сертификата обязательна.</p>
       </>}
       {target.kind === "repository" && <>
         <label className="field">URL Git-репозитория<input required type="url" value={target.git_repo_url} onChange={e => setTarget({...target, git_repo_url: e.target.value})} /></label>

@@ -13,7 +13,7 @@ import httpx
 from fastapi import FastAPI, HTTPException
 from app.config import validate_flat
 from app import control_client as control
-from app.adapters import scan
+from app.task_execution import execute_isolated, STOP_GRACE_SECONDS, KILL_WAIT_SECONDS
 from app.catalog import catalog
 from app.config import plan
 
@@ -77,7 +77,7 @@ def execute_engine(task, config):
     started = time.monotonic()
     engine = next(e for e in catalog() if e["id"] == task["engine"])
     try:
-        with httpx.Client(timeout=task.get("timeout_seconds", 300) + 20) as client:
+        with httpx.Client(timeout=task.get("timeout_seconds", 300) + STOP_GRACE_SECONDS + KILL_WAIT_SECONDS + 20) as client:
             response = client.post(worker_url(task["engine"]) + "/execute", json=task)
             if response.is_error:
                 try:
@@ -292,7 +292,7 @@ def execute_task(task: dict):
         raise HTTPException(status_code=429, detail="Контейнер занят")
     try:
         with tempfile.TemporaryDirectory(prefix="mcp-worker-") as tmp:
-            return scan(task, Path(tmp))
+            return execute_isolated(task, Path(tmp))
     except Exception as exc:
         raise HTTPException(status_code=422, detail=safe_error(exc, {"target": task})) from exc
     finally:

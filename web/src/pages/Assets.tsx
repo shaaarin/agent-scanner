@@ -192,7 +192,6 @@ function McpAssetWizard({ onCreated }: { onCreated: () => void }) {
   const [transport, setTransport] = useState<MCPTransport>("auto");
   const [bearerToken, setBearerToken] = useState("");
   const [headerRows, setHeaderRows] = useState<EnvRow[]>([{ key: "", value: "" }]);
-  const [verifyTls, setVerifyTls] = useState(true);
   const [gitRepoUrl, setGitRepoUrl] = useState("");
   const [gitAccessToken, setGitAccessToken] = useState("");
   const [branches, setBranches] = useState<string[]>([]);
@@ -310,7 +309,7 @@ function McpAssetWizard({ onCreated }: { onCreated: () => void }) {
     if (targetKind === "remote") {
       const parsedHeaders = rowsToMap(headerRows);
       if (bearerToken.trim()) parsedHeaders.Authorization = `Bearer ${bearerToken.trim()}`;
-      return { kind: "remote", server_url: serverUrl.trim(), transport, headers: parsedHeaders, verify_tls: verifyTls };
+      return { kind: "remote", server_url: serverUrl.trim(), transport, headers: parsedHeaders, verify_tls: true };
     }
     if (targetKind === "repository") {
       return {
@@ -419,7 +418,7 @@ function McpAssetWizard({ onCreated }: { onCreated: () => void }) {
               <div className="field">
                 <label>Транспорт MCP</label>
                 <select className="input" style={{ width: "100%" }} value={transport} onChange={(e) => setTransport(e.target.value as MCPTransport)}>
-                  <option value="auto">Автоопределение</option>
+                  <option value="auto">По умолчанию (Streamable HTTP)</option>
                   <option value="streamable_http">Streamable HTTP</option>
                   <option value="sse">Legacy SSE</option>
                 </select>
@@ -442,10 +441,7 @@ function McpAssetWizard({ onCreated }: { onCreated: () => void }) {
               </button>
               <p style={{ margin: "0.4rem 0 0", fontSize: 12, color: "var(--text-500)" }}>Уходят с каждым запросом к серверу. Bearer Token будет добавлен как Authorization.</p>
             </div>
-            <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "1rem" }}>
-              <input type="checkbox" checked={verifyTls} onChange={(e) => setVerifyTls(e.target.checked)} />
-              Проверять TLS-сертификат сервера
-            </label>
+            <p style={{ fontSize: 12, color: "var(--text-500)" }}>Для HTTPS проверка TLS-сертификата обязательна.</p>
           </>
         )}
 

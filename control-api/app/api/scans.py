@@ -43,8 +43,13 @@ def _compose_mcp_config(asset_target: dict, scanner_params: dict) -> str:
     проверок -- из запроса (scanner_ids, timeout_seconds, probes, ...).
     Неизвестные ключи отсеивает схема MCPScanConfig, так что контракт
     scanner-mcp не меняется, а конфиг нормализуется заранее."""
+    if "target" in scanner_params:
+        raise HTTPException(
+            status_code=422,
+            detail="Цель MCP-скана берётся из актива: параметр config.target передавать нельзя",
+        )
     try:
-        config = MCPScanConfig.model_validate(upgrade_flat({"target": asset_target, **scanner_params}))
+        config = MCPScanConfig.model_validate({**scanner_params, "target": asset_target})
     except ValidationError as exc:
         raise HTTPException(status_code=422, detail=json.loads(exc.json())) from exc
     return json.dumps(config.model_dump(mode="json"), ensure_ascii=False)

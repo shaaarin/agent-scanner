@@ -13,6 +13,7 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.sse import sse_client
 from mcp.client.stdio import stdio_client
 from mcp.client.streamable_http import streamablehttp_client
+from app.bundle_variables import BundleVariables
 
 
 def validate_url(value):
@@ -153,15 +154,16 @@ async def dynamic(c):
         return await run_dynamic(session, c)
 
 
-def stdio_command(root: Path, manifest: dict) -> StdioServerParameters:
+def stdio_command(root: Path, manifest: dict, user_config: dict | None = None) -> StdioServerParameters:
     """Команда запуска сервера из MCPB по манифесту: mcp_config.command
     приоритетнее, иначе entry_point + server.type (python|node)."""
     server = manifest.get("server") or {}
     mcp_config = server.get("mcp_config") or {}
+    variables = BundleVariables(root, manifest, user_config or {})
     entry_point = server.get("entry_point")
     if mcp_config.get("command"):
-        command = str(mcp_config["command"])
-        args = [str(a) for a in (mcp_config.get("args") or [])]
+        command = variables.render(mcp_config["command"])
+        args = variables.arguments(mcp_config.get("args", []))
     elif server.get("type") == "python" and entry_point:
         command, args = "python", [entry_point]
     elif server.get("type") == "node" and entry_point:
@@ -170,21 +172,30 @@ def stdio_command(root: Path, manifest: dict) -> StdioServerParameters:
         raise ValueError("Манифест MCPB не описывает запуск: нужен server.type (python|node) + entry_point или server.mcp_config.command")
     if not (root / (args[0] if args else "")).exists() and entry_point and not (root / entry_point).exists():
         raise ValueError(f"entry_point {entry_point} отсутствует в архиве")
-    # Секреты окружения: манифест + user_config поверх минимального базового
-    # окружения (полный process.env сервера не передаём).
+    manifest_env = mcp_config.get("env", {})
+    if not isinstance(manifest_env, dict):
+        raise ValueError("server.mcp_config.env должен быть объектом")
+    # Full worker environment is not exposed to substitutions or the server.
     env = {
         "PATH": os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"),
         "HOME": str(root),
         "PYTHONUNBUFFERED": "1",
-        **(mcp_config.get("env") or {}),
+        **{key: variables.render(value) for key, value in manifest_env.items()},
     }
+    # Compatibility with earlier platform bundles using direct env settings.
+    # Keep their str(bool) representation; template booleans use true/false.
+    env.update({str(k): str(v) for k, v in (user_config or {}).items()
+                if isinstance(v, (str, int, float, bool))})
+    if os.environ.get("MCP_EXECUTION_ID"):
+        env["MCP_EXECUTION_ID"] = os.environ["MCP_EXECUTION_ID"]
     return StdioServerParameters(command=command, args=args, env=env, cwd=str(root))
 
 
-async def deploy_and_check(root: Path, manifest: dict) -> None:
-    """Установка зависимостей бандла по его типу до запуска сервера."""
+async def deploy_and_check(root: Path, manifest: dict) -> Path | None:
+    """Install bundle dependencies; return the Python import directory, if any."""
     server_type = (manifest.get("server") or {}).get("type")
     from app.process import execute
+    python_deps = None
 
     if server_type == "python" and (root / "requirements.txt").exists():
         deps = root / ".bundle-deps"
@@ -196,27 +207,30 @@ async def deploy_and_check(root: Path, manifest: dict) -> None:
         )
         if rc:
             raise ValueError("pip install зависимостей MCPB завершился с ошибкой: " + stderr[-400:])
-        os.environ["PYTHONPATH"] = os.pathsep.join(filter(None, [str(deps), os.environ.get("PYTHONPATH")]))
+        python_deps = deps
 
     if server_type == "node" and (root / "package.json").exists():
         rc, _, stderr = execute(["npm", "install", "--omit=dev", "--no-audit", "--no-fund", "--loglevel=error"], cwd=root, timeout=180)
         if rc:
             raise ValueError("npm install зависимостей MCPB завершился с ошибкой: " + stderr[-400:])
+    return python_deps
 
 
 @asynccontextmanager
 async def stdio_session_for_bundle(root: Path, manifest: dict, user_config: dict):
     """Деплой MCPB: установка зависимостей, запуск сервера из манифеста и
     MCP-сеанс по stdio (внутри контейнера сканера)."""
-    await deploy_and_check(root, manifest)
-    params = stdio_command(root, manifest)
-    # user_config из актива передаётся переменными окружения запуска.
-    params = StdioServerParameters(
-        command=params.command,
-        args=params.args,
-        cwd=params.cwd,
-        env={**{k: v for k, v in (params.env or {}).items()}, **{str(k): str(v) for k, v in (user_config or {}).items() if isinstance(v, (str, int, float, bool))}},
-    )
+    # Fail on missing/unsupported variables before installing or running code.
+    params = stdio_command(root, manifest, user_config)
+    python_deps = await deploy_and_check(root, manifest)
+    if python_deps is not None:
+        # Only this MCP child sees its dependencies. Keep manifest/user paths,
+        # but never inherit or mutate the worker's global PYTHONPATH.
+        child_env = dict(params.env or {})
+        child_env["PYTHONPATH"] = os.pathsep.join(filter(None, [
+            str(python_deps), child_env.get("PYTHONPATH"),
+        ]))
+        params = params.model_copy(update={"env": child_env})
     async with stdio_client(params) as streams:
         async with ClientSession(streams[0], streams[1]) as session:
             await session.initialize()
