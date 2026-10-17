@@ -30,6 +30,7 @@
 | `scanner-semgrep` (`scanner/semgrep`) | Скан `ai_code_scan`: клонирует репозиторий агента и прогоняет локальный semgrep по правилам для AI/LLM-кода (`rules/ai-security.yml` + опциональные наборы Registry). kind/launcher и внешние ключи не нужны, код не покидает платформу. |
 | `scanner-indirect` (`scanner/indirect`) | Скан `indirect_injection`: поднимает агента через `launcher`, шлёт легитимную задачу и через прокси подкладывает инъекцию в результаты его инструментов (сообщения `role: tool`), оценивая по контрольной метке. |
 | `scanner-sysleak` (`scanner/sysleak`) | Скан `system_prompt_leak`: поднимает агента через `launcher`, через прокси вставляет метку в его системное сообщение и шлёт атакующие промпты, проверяя ответ на наличие метки (утечка системного промпта). |
+| `scanner-skills` (`scanner/skills`) | Скан `agent_skills`: распаковывает zip или клонирует репозиторий skill-актива и проверяет навыки (`SKILL.md`) движками Cisco skill-scanner и NVIDIA SkillSpector (подпроцессы из `/opt/engines/*`) со своими YARA-правилами и проверкой frontmatter; вердикт `pass`/`review`/`block` считает сам. Без kind/launcher и LLM. |
 | `launcher` | Собирает образ агента в кластере (git-clone + Kaniko) и запускает Pod с MITM-сайдкаром, по kubeconfig, без Docker-сокета. |
 | `web` | React/Vite дашборд. **Весь текст интерфейса — на русском**, новый текст тоже. |
 | `control-api-mitm-bridge` / `launcher-mitm-bridge` | `alpine/socat`-форвардеры, владеющие опубликованным портом вместо dual-homed сервисов (quirk WSL2, см. ниже). |
@@ -111,8 +112,8 @@
   бейджи во фронте -- отображение тех же правил.
 - **Активы.** Три вида: `agent` (`AgentConfig`), `mcp`
   (`McpAsset`: цель remote/repository/bundle в `config` JSON) и `skill`
-  (`SkillAsset`: git-репозиторий или zip-архив BLOB-ом; сканера для skills
-  пока нет — запуск вернёт 400/422). Скан ссылается на актив парой
+  (`SkillAsset`: git-репозиторий или zip-архив BLOB-ом; сканирует
+  `scanner-skills`, источник копируется в `Scan.config.source`). Скан ссылается на актив парой
   `asset_kind`/`asset_id`; для агентов синхронно заполняется
   `agent_config_id` — его читают сканеры и launcher, колонка строковая и
   хранит значения (`'agent'`), не имена enum.
@@ -133,7 +134,7 @@
   `scanner/<имя>` (`scanner-<имя>` в compose) с одинаковым контрактом:
   `GET /health`, `GET /schema`, `POST /run/{scan_id}` (ответ сразу, работа в
   фоне), прогресс/результаты — в control-api через `PATCH /scans/{id}` и
-  `POST /scans/{id}/logs`. Тип без сканера в реестре (`agent_skills`)
+  `POST /scans/{id}/logs`. Тип без сканера в реестре
   запустить нельзя (400). Общий код между сканерами не выносится:
   `control_client.py` (и `target.py` у интерактивных сканеров) у каждого
   свой.
@@ -164,6 +165,15 @@
   и пользовательские YAML-правила — по выбору в форме скана. Формат
   `Scan.results` общий с `code_scan` — страницу рендерит тот же компонент
   (`CodeScanResults`, имя движка — поле `engine_label`).
+- **Анализ Agent Skills — локальные движки.** `scanner-skills` выполняет
+  `agent_skills` без облака и без LLM: Cisco skill-scanner 2.1.0 и NVIDIA
+  SkillSpector 2.11.2 в отдельных venv (`/opt/engines/*`, lock-файлы с
+  хэшами), свои YARA-правила `scanner/skills/rules/yara/` (пак Cisco
+  генерируется при сборке образа) и `app/manifest_check.py`. Вердикт считает
+  платформа (`app/report.py`), вердикты движков справочные. Файлы навыков не
+  исполняются. Сеть нужна только SkillSpector (OSV.dev). Решения и риски —
+  `SKILLSS.md`, архитектура — `docs/skills-scan-architecture.md`, страница
+  результатов — `SkillsScanResults`.
 - **Прокси идентифицирует клиента.** На исходящих `chat/completions`
   ставится `User-Agent` (`LLM_CLIENT_USER_AGENT`) и, для `opencode.ai`,
   `x-opencode-session: <SESSION_ID>`. Тело/промпт не переписываются —
@@ -218,6 +228,14 @@ docker compose up -d --build
 launcher/scanner-deepteam), прогнать реальный HTTP/k8s сценарий, посмотреть
 `control-api` `/events`, логи и `kubectl get pods`/`logs`. Придерживайтесь
 этого, не добавляйте тест-фреймворк без запроса.
+
+**Исключение — модуль Agent Skills.** Для `scanner/skills/**`
+(`tests/`, `eval/tests/`) и логики skill-активов в control-api
+(`control-api/tests/`) есть pytest — по явной просьбе владельца модуля.
+pytest только в `requirements-dev.txt`, в образы сервисов не попадает; моков
+LLM нет (LLM в модуле не используется). Как запускать — в
+`docs/skills-scan-architecture.md`. Живая проверка для этих частей тоже
+обязательна. На остальные сервисы исключение не распространяется.
 
 ## Особенности окружения (WSL2/Docker Desktop)
 
