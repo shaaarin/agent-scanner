@@ -5,9 +5,11 @@ import type { AgentConfig, AssetKind, McpAsset, Scan, SkillAsset } from "../api/
 import { PageHeader } from "../components/PageHeader";
 import { ScansTable } from "../components/ScansTable";
 import { ScanCreateModal } from "../components/ScanCreateModal";
+import { AssetSummary } from "../components/AssetSummary";
 
-// Карточка актива: реквизиты, кнопка «Новое сканирование» и список сканов
-// этого актива. Активы трёх видов читаются из своих эндпоинтов.
+// Карточка актива: сводка-дашборд (оценка устойчивости и находки),
+// реквизиты, кнопка «Новое сканирование» и список сканов этого актива.
+// Активы трёх видов читаются из своих эндпоинтов.
 
 const KIND_LABELS: Record<AssetKind, string> = {
   agent: "Агент",
@@ -172,6 +174,8 @@ export function AssetDetail() {
         {labels.code && <span className="badge badge-neutral">есть код</span>}
         {labels.live && <span className="badge badge-success">живой сервис</span>}
       </div>
+
+      <AssetSummary kind={assetKind} id={assetId} refreshKey={scansRefreshKey} />
 
       <div className="card" style={{ padding: "1.5rem", marginBottom: "1.5rem" }}>
         {agent && <AgentProps asset={agent} />}

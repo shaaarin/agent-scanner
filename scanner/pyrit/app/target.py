@@ -173,6 +173,8 @@ class AgentPromptTarget(PromptTarget):
         # Ресурсы диалогов: conversation_id атаки -> нить LangGraph / session_id.
         self._threads: dict[str, str] = {}
         self._sessions: dict[str, str] = {}
+        # Журнал раундов всех атак подряд (см. begin_capture/end_capture).
+        self._transcript: list[dict] = []
         if self._mode == "langgraph":
             langgraph_config = agent_config.get("langgraph_config") or {}
             if not langgraph_config.get("base_url"):
@@ -199,7 +201,21 @@ class AgentPromptTarget(PromptTarget):
         if not message:
             raise RuntimeError("пустое сообщение атаки")
         reply = await asyncio.to_thread(self._send_sync, conversation_id, str(message))
+        # Диалог пишем здесь, а не из результата PyRIT: цель видит ровно то,
+        # что ушло агенту (после конвертеров) и что он ответил -- этим потом
+        # выгружаются успешные атаки.
+        self._transcript.append({"role": "user", "content": str(message)})
+        self._transcript.append({"role": "assistant", "content": reply})
         return [construct_response_from_request(request=piece, response_text_pieces=[reply])]
+
+    def begin_capture(self) -> int:
+        """Отметка в журнале диалогов перед запуском одной атаки."""
+        return len(self._transcript)
+
+    def end_capture(self, mark: int) -> list[dict]:
+        """Раунды, записанные с момента `begin_capture`. Атаки выполняются
+        последовательно, поэтому между метками -- диалог ровно одной атаки."""
+        return [dict(turn) for turn in self._transcript[mark:]]
 
     def _send_sync(self, conversation_id: str, message: str) -> str:
         if self._mode == "langgraph":

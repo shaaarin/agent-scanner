@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useParams, useNavigate } from "react-router-dom";
 import { api } from "../api/client";
-import type { Scan, AgentConfig, ScanResults, ScanLog, ScannerRegistration, CodeScanResults as CodeScanResultsData, IndirectInjectionResults as IndirectInjectionResultsData, SystemPromptLeakResults as SystemPromptLeakResultsData } from "../api/types";
+import type { Scan, AgentConfig, ScanResults, ScanLog, ScanReport, ScannerRegistration, CodeScanResults as CodeScanResultsData, IndirectInjectionResults as IndirectInjectionResultsData, SystemPromptLeakResults as SystemPromptLeakResultsData } from "../api/types";
 import { scanTypeLabel } from "../api/scanTypes";
 import { PageHeader } from "../components/PageHeader";
 import { CodeScanResults } from "../components/CodeScanResults";
 import { IndirectInjectionResults } from "../components/IndirectInjectionResults";
 import { SystemPromptLeakResults } from "../components/SystemPromptLeakResults";
+import { ScanReportView } from "../components/ScanReport";
 
 import { MCPResults, type MCPResultData } from "../components/MCPResults";
 
@@ -34,6 +35,7 @@ export function ScansDetail() {
   const [results, setResults] = useState<ScanResults | null>(null);
   const [logs, setLogs] = useState<ScanLog[]>([]);
   const [scanner, setScanner] = useState<ScannerRegistration | null>(null);
+  const [report, setReport] = useState<ScanReport | null>(null);
   const [starting, setStarting] = useState(false);
   const [startError, setStartError] = useState<string | null>(null);
   const logEndRef = useRef<HTMLDivElement | null>(null);
@@ -67,6 +69,19 @@ export function ScansDetail() {
       }
     }
   }, [scan?.results]);
+
+  // Единый отчёт (метрики, оценка, находки) нормализует control-api, поэтому
+  // страница не разбирает формат каждого сканера сама.
+  useEffect(() => {
+    if (!id || !scan?.results) {
+      setReport(null);
+      return;
+    }
+    api
+      .get<ScanReport>(`/scans/${id}/report`)
+      .then(setReport)
+      .catch((error) => console.error("Failed to load report:", error));
+  }, [id, scan?.results]);
 
   useEffect(() => {
     if (!id || (scan && TERMINAL_STATUSES.includes(scan.status))) return;
@@ -340,73 +355,61 @@ export function ScansDetail() {
         </div>
       )}
 
-      {scan.status === "completed" && results && (scan.type === "code_scan" || scan.type === "ai_code_scan") && (
-        <CodeScanResults results={results as unknown as CodeScanResultsData} />
-      )}
-
-      {scan.status === "completed" && results && scan.type === "indirect_injection" && (
-        <IndirectInjectionResults results={results as unknown as IndirectInjectionResultsData} />
-      )}
-
-      {scan.status === "completed" && results && scan.type === "system_prompt_leak" && (
-        <SystemPromptLeakResults results={results as unknown as SystemPromptLeakResultsData} />
-      )}
-
-      {results && scan.type === "mcp" && <MCPResults results={results as unknown as MCPResultData} />}
-
-      {results && scan.type !== "code_scan" && scan.type !== "ai_code_scan" && scan.type !== "indirect_injection" && scan.type !== "system_prompt_leak" && scan.type !== "mcp" &&
-        (scan.status === "completed" || (scan.status === "failed" && (results.vulnerability_results?.length ?? 0) > 0)) && (
-        <div className="card" style={{ padding: "2rem", marginTop: scan.status === "failed" ? "2rem" : undefined }}>
-          <h3 style={{ marginBottom: "1.5rem" }}>{scan.status === "failed" ? "Кейсы" : "Результаты"}</h3>
-
-          {scan.status === "completed" && results.overall_score !== undefined && (
-            <div style={{ marginBottom: "2rem", padding: "1.2rem", background: "var(--background-generic)", borderRadius: "var(--radius-m)" }}>
-              <div style={{ color: "var(--text-600)", fontSize: "0.9rem" }}>Доля пройденных проверок</div>
-              <div style={{ fontSize: "2rem", fontWeight: "bold", marginTop: "0.5rem" }}>
-                {Math.round(results.overall_score * 100)}%
-              </div>
-            </div>
-          )}
-
-          {results.vulnerability_results && results.vulnerability_results.length > 0 && (
-            <div>
-              <h4 style={{ marginBottom: "1rem" }}>Разбивка по уязвимостям</h4>
-              <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                <thead>
-                  <tr style={{ borderBottom: "0.1rem solid var(--separator-default)" }}>
-                    <th style={{ padding: "0.75rem", textAlign: "left" }}>Уязвимость</th>
-                    <th style={{ padding: "0.75rem", textAlign: "left" }}>Статус</th>
-                    <th style={{ padding: "0.75rem", textAlign: "left" }}>Защита</th>
-                    <th style={{ padding: "0.75rem", textAlign: "left" }}>Обоснование</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {results.vulnerability_results.map((result, index) => (
-                    <tr key={index} style={{ borderBottom: "0.1rem solid var(--separator-default)" }}>
-                      <td style={{ padding: "0.75rem" }}>{result.vulnerability}</td>
-                      <td style={{ padding: "0.75rem" }}>
-                        {result.errored ? (
-                          <span className="badge badge-warning">Ошибка</span>
-                        ) : (
-                          <span className={`badge ${result.passed ? "badge-success" : "badge-danger"}`}>
-                            {result.passed ? "Устойчив" : "Уязвим"}
-                          </span>
-                        )}
-                      </td>
-                      <td style={{ padding: "0.75rem" }}>
-                        {result.errored ? "—" : `${Math.round(result.score * 100)}%`}
-                      </td>
-                      <td style={{ padding: "0.75rem", fontSize: "0.9rem", color: "var(--text-600)" }}>
-                        {result.reasoning}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
+      {report && (
+        <ScanReportView report={report}>
+          <NativeScannerResults scan={scan} results={results} />
+        </ScanReportView>
       )}
     </div>
+  );
+}
+
+// Родной отчёт сканера -- под раскрывающимся блоком единого отчёта: единый
+// формат даёт сопоставимость, а эти виды сохраняют детали конкретного движка
+// (матрицы по инструментам, проверки MCP, таблица кейсов DeepTeam/PyRIT).
+function NativeScannerResults({ scan, results }: { scan: Scan; results: ScanResults | null }) {
+  if (!results) return null;
+  if (scan.type === "code_scan" || scan.type === "ai_code_scan") {
+    return <CodeScanResults results={results as unknown as CodeScanResultsData} />;
+  }
+  if (scan.type === "indirect_injection") {
+    return <IndirectInjectionResults results={results as unknown as IndirectInjectionResultsData} />;
+  }
+  if (scan.type === "system_prompt_leak") {
+    return <SystemPromptLeakResults results={results as unknown as SystemPromptLeakResultsData} />;
+  }
+  if (scan.type === "mcp") {
+    return <MCPResults results={results as unknown as MCPResultData} />;
+  }
+  if (!results.vulnerability_results?.length) return null;
+  return (
+    <table style={{ width: "100%", borderCollapse: "collapse" }}>
+      <thead>
+        <tr style={{ borderBottom: "0.1rem solid var(--separator-default)" }}>
+          <th style={{ padding: "0.75rem", textAlign: "left" }}>Уязвимость</th>
+          <th style={{ padding: "0.75rem", textAlign: "left" }}>Статус</th>
+          <th style={{ padding: "0.75rem", textAlign: "left" }}>Защита</th>
+          <th style={{ padding: "0.75rem", textAlign: "left" }}>Обоснование</th>
+        </tr>
+      </thead>
+      <tbody>
+        {results.vulnerability_results.map((result, index) => (
+          <tr key={index} style={{ borderBottom: "0.1rem solid var(--separator-default)" }}>
+            <td style={{ padding: "0.75rem" }}>{result.vulnerability}</td>
+            <td style={{ padding: "0.75rem" }}>
+              {result.errored ? (
+                <span className="badge badge-warning">Ошибка</span>
+              ) : (
+                <span className={`badge ${result.passed ? "badge-success" : "badge-danger"}`}>
+                  {result.passed ? "Устойчив" : "Уязвим"}
+                </span>
+              )}
+            </td>
+            <td style={{ padding: "0.75rem" }}>{result.errored ? "—" : `${Math.round(result.score * 100)}%`}</td>
+            <td style={{ padding: "0.75rem", fontSize: "0.9rem", color: "var(--text-600)" }}>{result.reasoning}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
   );
 }

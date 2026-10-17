@@ -10,6 +10,7 @@ from app.api import (
     llm_models,
     mcp_artifacts,
     mcp_assets,
+    reports,
     scans,
     scanners,
     skill_assets,
@@ -34,6 +35,7 @@ app.include_router(mcp_artifacts.router)
 app.include_router(mcp_assets.router)
 app.include_router(skill_assets.router)
 app.include_router(scanners.router)
+app.include_router(reports.router)
 app.include_router(scans.router)
 app.include_router(injection.router)
 app.include_router(library.router)

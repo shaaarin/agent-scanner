@@ -385,3 +385,102 @@ export interface SystemPromptLeakResults {
   trials: SysLeakTrialResult[];
   error?: string;
 }
+
+// --- единый отчёт сканирования (GET /scans/{id}/report) ---------------------
+// Один формат для всех сканеров: одинаковые метрики и одинаковые находки.
+// Нормализацию делает control-api (app/reports.py).
+
+export type ScanRating = "protected" | "partial" | "unsafe" | "unknown";
+export type AnalysisKind = "dynamic" | "static" | "mixed";
+export type FindingSeverity = "critical" | "high" | "medium" | "low" | "info";
+
+export interface ReportFindingLocation {
+  file: string | null;
+  start_line: number | null;
+  end_line: number | null;
+}
+
+export interface ReportConversationTurn {
+  role: string;
+  content: string;
+  injected?: boolean;
+  note?: string;
+  name?: string | null;
+}
+
+export interface ReportFinding {
+  id: string;
+  title: string;
+  severity: FindingSeverity;
+  category: string;
+  rule_id: string | null;
+  description: string;
+  recommendation: string;
+  location: ReportFindingLocation | null;
+  evidence: { detail?: string; conversation?: ReportConversationTurn[]; engine?: string; target?: string; trial_id?: number } | null;
+}
+
+export interface ReportMetrics {
+  analysis: AnalysisKind;
+  checks_total: number | null;
+  checks_passed: number | null;
+  checks_failed: number | null;
+  checks_errored: number | null;
+  checks_skipped: number | null;
+  resistance_rate: number | null;
+  attack_success_rate: number | null;
+  findings_total: number;
+  by_severity: Record<FindingSeverity, number>;
+}
+
+export interface ScanReport {
+  version: number;
+  scan: {
+    id: number;
+    name: string;
+    type: ScanType;
+    type_label: string;
+    status: ScanStatus;
+    analysis: AnalysisKind;
+    asset_kind: AssetKind | null;
+    asset_id: number | null;
+    phase: string | null;
+    error: string | null;
+    created_at: string | null;
+    started_at: string | null;
+    finished_at: string | null;
+  };
+  metrics: ReportMetrics;
+  rating: ScanRating;
+  rating_label: string;
+  findings: ReportFinding[];
+  engine: { name: string | null; version: string | null; coverage: string | null; duration_sec: number | null };
+}
+
+// --- сводка актива (GET /assets/{kind}/{id}/summary) ------------------------
+
+export interface AssetSummaryScanType {
+  type: ScanType;
+  type_label: string;
+  analysis: AnalysisKind;
+  scan_id: number;
+  scan_name: string;
+  finished_at: string | null;
+  rating: ScanRating;
+  rating_label: string;
+  findings_total: number;
+  resistance_rate: number | null;
+  attack_success_rate: number | null;
+  checks_total: number | null;
+}
+
+export interface AssetSummary {
+  asset: { kind: AssetKind; id: number };
+  scans: { total: number; pending: number; running: number; completed: number; failed: number };
+  findings_total: number;
+  by_severity: Record<FindingSeverity, number>;
+  rating: ScanRating;
+  rating_label: string;
+  by_scan_type: AssetSummaryScanType[];
+  last_scan_at: string | null;
+}
