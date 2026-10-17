@@ -42,6 +42,7 @@ export function ScansTable({
   const navigate = useNavigate();
   const [scans, setScans] = useState<Scan[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [retrying, setRetrying] = useState<number | null>(null);
 
   useEffect(() => {
     onLoad().then(setScans).catch((e) => setError(e instanceof Error ? e.message : String(e)));
@@ -77,6 +78,19 @@ export function ScansTable({
     }
   };
 
+  const handleRetry = async (scanId: number) => {
+    setError(null);
+    setRetrying(scanId);
+    try {
+      const fresh = await api.post<Scan>(`/scans/${scanId}/retry`, {mode: "all"});
+      navigate(`/scans/${fresh.id}`);
+    } catch (e) {
+      setError(`Не удалось повторить сканирование: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setRetrying(null);
+    }
+  };
+
   return (
     <div className="card">
       {error && (
@@ -108,6 +122,7 @@ export function ScansTable({
                   <button className="btn btn-sm btn-secondary" onClick={() => navigate(`/scans/${scan.id}`)}>
                     {scan.name}
                   </button>
+                  {scan.retry_of_scan_id != null && <div style={{marginTop: "0.4rem", color: "var(--text-600)", fontSize: "0.85rem"}}>Повтор скана №{scan.retry_of_scan_id}</div>}
                 </td>
                 <td style={{ padding: "1rem" }}>{scanTypeLabel(scan.type)}</td>
                 <td style={{ padding: "1rem" }}>
@@ -125,7 +140,13 @@ export function ScansTable({
                       Запустить
                     </button>
                   )}
-                  <button className="btn btn-sm btn-danger" onClick={() => handleDelete(scan.id)}>
+                  {["failed", "partially_failed"].includes(displayedScanStatus(scan)) && <button
+                    className="btn btn-sm btn-primary" disabled={retrying !== null}
+                    title="Создать и запустить отдельную попытку с теми же настройками"
+                    onClick={() => handleRetry(scan.id)} style={{marginRight: "0.5rem"}}>
+                    {retrying === scan.id ? "Запуск…" : "Повторить"}
+                  </button>}
+                  <button className="btn btn-sm btn-danger" disabled={scan.status === "running"} onClick={() => handleDelete(scan.id)}>
                     Удалить
                   </button>
                 </td>

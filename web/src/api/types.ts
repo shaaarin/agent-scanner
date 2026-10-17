@@ -79,6 +79,9 @@ export interface Scan {
   id: number;
   name: string;
   type: ScanType;
+  retry_of_scan_id: number | null;
+  retry_root_scan_id: number | null;
+  retry_mode: ScanRetryMode | null;
   asset_kind: AssetKind | null;
   asset_id: number | null;
   agent_config_id: number | null;
@@ -95,6 +98,23 @@ export interface Scan {
   created_at: string;
   started_at: string | null;
   finished_at: string | null;
+}
+
+export type ScanRetryMode = "all" | "failed" | "engine";
+export interface ScanRetryOptions {
+  can_retry_all: boolean;
+  can_retry_failed: boolean;
+  active_scan_id: number | null;
+  engines: {id: string; name: string; status: "success" | "failed" | "pending"}[];
+  attempts: {
+    id: number;
+    retry_of_scan_id: number | null;
+    retry_mode: ScanRetryMode | null;
+    status: ScanStatus;
+    created_at: string;
+    started_at: string | null;
+    finished_at: string | null;
+  }[];
 }
 
 // Раздел «Активы»: единая запись из GET /assets.

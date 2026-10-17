@@ -11,6 +11,7 @@ import { SystemPromptLeakResults } from "../components/SystemPromptLeakResults";
 import { ScanReportView } from "../components/ScanReport";
 
 import { MCPResults, type MCPResultData } from "../components/MCPResults";
+import { ScanRetries } from "../components/ScanRetries";
 
 const LOG_PAGE_SIZE = 500;
 
@@ -28,6 +29,12 @@ async function fetchLogsAfter(scanId: string, afterId: number): Promise<ScanLog[
 }
 
 export function ScansDetail() {
+  const { id } = useParams<{ id: string }>();
+  // Switching between attempts must reset the report, cursor and log state.
+  return <ScanDetailView key={id} />;
+}
+
+function ScanDetailView() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const [scan, setScan] = useState<Scan | null>(null);
@@ -245,6 +252,8 @@ export function ScansDetail() {
           )}
         </div>
       </div>
+
+      {(TERMINAL_SCAN_STATUSES.includes(scan.status) || scan.retry_of_scan_id !== null) && <ScanRetries scan={scan} />}
 
       {(scan.status === "running" || TERMINAL_SCAN_STATUSES.includes(scan.status)) && (
         <div className="card" style={{ marginBottom: "2rem" }}>

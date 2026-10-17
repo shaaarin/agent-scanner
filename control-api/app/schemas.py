@@ -241,6 +241,19 @@ class ScanUpdate(BaseModel):
     built_image: Optional[str] = None
 
 
+class ScanRetry(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mode: Literal["all", "failed", "engine"] = "all"
+    engine_id: Optional[str] = None
+
+    @model_validator(mode="after")
+    def require_engine(self):
+        if (self.mode == "engine") != (self.engine_id is not None):
+            raise ValueError("engine_id задаётся только для перезапуска отдельного движка")
+        return self
+
+
 class ScanCreate(BaseModel):
     """Создание скана из UI: всегда внутри актива. Параметры сканера
     (`config`) валидируются по реестру сканеров, статус/результаты клиент
