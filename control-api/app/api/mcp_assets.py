@@ -69,10 +69,11 @@ def update_mcp_asset(asset_id: int, payload: McpAssetUpdate, session: Session = 
     asset = session.get(McpAsset, asset_id)
     if not asset:
         raise HTTPException(status_code=404, detail="MCP-актив не найден")
-    updates = payload.model_dump(exclude_unset=True)
+    # As in create: persist JSON-compatible values, not Pydantic HttpUrl.
+    updates = payload.model_dump(mode="json", exclude_unset=True)
     if "deploy" in updates:
-        # Из pydantic-модели в JSON-словарь (пустые значения выкидываем).
-        updates["deploy"] = updates["deploy"].model_dump(exclude_none=True) if updates["deploy"] else None
+        # The outer dump already converted nested models to dictionaries.
+        updates["deploy"] = payload.deploy.model_dump(mode="json", exclude_none=True) if payload.deploy is not None else None
     new_name = updates.get("name")
     if new_name and new_name != asset.name:
         existing = session.exec(select(McpAsset).where(McpAsset.name == new_name)).first()
