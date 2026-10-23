@@ -33,6 +33,12 @@ OpenAI, OpenRouter, self-hosted vLLM/Ollama и т.п.
 наборы правил (`p/...`) скачиваются из Semgrep Registry при скане — этому
 контейнеру нужен исходящий интернет.
 
+Анализ навыков (`scanner-skills`, тип `agent_skills`) ключей не требует:
+движки Cisco skill-scanner и NVIDIA SkillSpector выполняются локально, LLM
+не используется. Исходящий интернет нужен только SkillSpector для проверки
+зависимостей через OSV.dev; без него скан проходит с предупреждением.
+Первая сборка образа долгая (два venv движков, ~1,6 ГБ).
+
 ## 2. Запуск стека
 
 ```
@@ -49,8 +55,8 @@ docker compose up -d --build
 | `proxy` | http://localhost:8100 |
 | `launcher` | http://localhost:8400 |
 
-Сканеры `scanner-deepteam`, `scanner-promptfoo` и `scanner-semgrep`
-работают без опубликованного порта — `control-api` обращается к ним по
+Сканеры (`scanner-deepteam`, `scanner-promptfoo`, `scanner-semgrep`,
+`scanner-skills` и остальные) работают без опубликованного порта — `control-api` обращается к ним по
 внутренней сети. Проверка: `curl localhost:8000/health`.
 
 > Если стек поднимался до разделения сканеров, удалите старый контейнер
@@ -59,7 +65,7 @@ docker compose up -d --build
 Только анализ кода, без кластера (сеть `kind` не нужна):
 
 ```
-docker compose up -d --build control-api web scanner-promptfoo scanner-semgrep
+docker compose up -d --build control-api web scanner-promptfoo scanner-semgrep scanner-skills
 ```
 
 ## 3. Включение `launcher` и `scanner-deepteam`
@@ -321,8 +327,10 @@ psql -U agent_scanner -d agent_scanner -c '\dt'`.
   `docker compose up -d scanner-promptfoo`.
 - **Анализ кода падает на «Клонирование».** Неверный адрес, ветка или
   токен репозитория в конфигурации агента. Токен в журнал не пишется.
-- **«Сканер пока не подключён» при запуске.** Тип скана без своего сервиса
-  (`mcp`, `agent_skills`) — так и задумано.
+- **«Сканер пока не подключён» при запуске.** У типа скана нет
+  зарегистрированного сервиса в `control-api/app/scanner_registry.py`.
+- **Скан навыков падает «scanner-skills недоступен».** Сервис не поднят или
+  ещё собирается: `docker compose up -d --build scanner-skills`.
 - **`403 namespace is being terminated` при `/launch`.** Ретест сразу после
   `/stop`: namespace ещё удаляется. Дождитесь, пока
   `kubectl get ns` перестанет показывать `scan-*`, и повторите запуск.

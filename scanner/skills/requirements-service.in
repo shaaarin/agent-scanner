@@ -1,0 +1,5 @@
+# Окружение сервиса scanner-skills (/opt/service). Lock: requirements-service.lock (D-32).
+fastapi
+uvicorn[standard]
+httpx
+pyyaml

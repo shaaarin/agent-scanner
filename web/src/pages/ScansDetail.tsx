@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useParams, useNavigate } from "react-router-dom";
 import { api } from "../api/client";
-import type { Scan, AgentConfig, ScanResults, ScanLog, ScanReport, ScannerRegistration, CodeScanResults as CodeScanResultsData, IndirectInjectionResults as IndirectInjectionResultsData, SystemPromptLeakResults as SystemPromptLeakResultsData } from "../api/types";
+import type { Scan, AgentConfig, ScanResults, ScanLog, ScanReport, ScannerRegistration, CodeScanResults as CodeScanResultsData, IndirectInjectionResults as IndirectInjectionResultsData, SystemPromptLeakResults as SystemPromptLeakResultsData, SkillsScanResults as SkillsScanResultsData } from "../api/types";
 import { displayedScanStatus, scanTypeLabel, TERMINAL_SCAN_STATUSES } from "../api/scanTypes";
 import { ScanStatusBadge } from "../components/ScansTable";
 import { PageHeader } from "../components/PageHeader";
@@ -9,6 +9,7 @@ import { CodeScanResults } from "../components/CodeScanResults";
 import { IndirectInjectionResults } from "../components/IndirectInjectionResults";
 import { SystemPromptLeakResults } from "../components/SystemPromptLeakResults";
 import { ScanReportView } from "../components/ScanReport";
+import { SkillsScanResults } from "../components/SkillsScanResults";
 
 import { MCPResults, type MCPResultData } from "../components/MCPResults";
 import { ScanRetries } from "../components/ScanRetries";
@@ -160,26 +161,6 @@ function ScanDetailView() {
 
   if (!scan) {
     return <div>Загрузка сканирования…</div>;
-  }
-
-  if (scan.type === "agent_skills") {
-    return (
-      <div>
-      <PageHeader
-        title={scan.name}
-        description={`${typeLabel} · сканирование`}
-      />
-      <div className="card" style={{ padding: "3.2rem", textAlign: "center" }}>
-        <h2 style={{ marginBottom: "1rem" }}>В разработке</h2>
-        <p style={{ color: "var(--text-600)", margin: 0 }}>
-          Сканирование типа {scanTypeLabel(scan.type)} пока не реализовано.
-        </p>
-        <button className="btn btn-secondary" onClick={() => navigate("/scans")} style={{ marginTop: "1.6rem" }}>
-          Назад к списку
-        </button>
-      </div>
-      </div>
-    );
   }
 
   return (
@@ -339,6 +320,8 @@ function ScanDetailView() {
               ? "Платформа скачает код агента и проверит его через promptfoo. Агент при этом не запускается."
               : scan.type === "ai_code_scan"
               ? "Платформа скачает код агента и проверит его локальным Semgrep по AI-правилам. Агент при этом не запускается, код никуда не отправляется."
+              : scan.type === "agent_skills"
+              ? "Платформа распакует архив или склонирует репозиторий навыков и проверит их движками Cisco skill-scanner и NVIDIA SkillSpector. Код навыков не запускается и никуда не отправляется."
               : "Платформа соберёт агента, поднимет его и проверит ответы на выбранные атаки."}
           </p>
           <button className="btn btn-primary" onClick={handleStart} disabled={starting} style={{ marginTop: "1.6rem" }}>
@@ -376,6 +359,9 @@ function NativeScannerResults({ scan, results }: { scan: Scan; results: ScanResu
   }
   if (scan.type === "system_prompt_leak") {
     return <SystemPromptLeakResults results={results as unknown as SystemPromptLeakResultsData} />;
+  }
+  if (scan.type === "agent_skills") {
+    return <SkillsScanResults results={results as unknown as SkillsScanResultsData} />;
   }
   if (scan.type === "mcp") {
     return <MCPResults results={results as unknown as MCPResultData} />;

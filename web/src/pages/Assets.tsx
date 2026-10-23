@@ -688,7 +688,7 @@ function SkillsAssetsTab() {
           <div style={{ padding: "3.2rem", textAlign: "center" }}>
             <p style={{ margin: 0, color: "var(--text-700)", fontWeight: 500 }}>Пока нет ни одного skill-актива</p>
             <p style={{ margin: "0.6rem 0 0", color: "var(--text-500)", fontSize: 13 }}>
-              Добавьте набор skills из репозитория или zip-архива. Сканирование skills появится позже.
+              Добавьте набор skills из репозитория или zip-архива, затем запустите для него проверку в карточке актива.
             </p>
           </div>
         ) : (

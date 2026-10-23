@@ -38,6 +38,7 @@ flowchart TB
             ssys["scanner-sysleak<br/>system_prompt_leak"]
             spf["scanner-promptfoo<br/>code_scan"]
             ssg["scanner-semgrep<br/>ai_code_scan"]
+            ssk["scanner-skills<br/>agent_skills"]
             smcp["scanner-mcp (координатор)<br/>mcp"]
         end
 
@@ -78,6 +79,7 @@ flowchart TB
 
     spf -- "git clone" --> git
     ssg -- "git clone" --> git
+    ssk -- "git clone" --> git
     spf --> cloud
 
     pod -- "исходящий HTTPS агента<br/>(перехват)" --> proxy
@@ -122,7 +124,7 @@ flowchart TB
 |---|---|---|
 | Агент | `repository` (сборка платформой в kind) или `remote` (готовый HTTP-сервис) | 6 агентных сканеров (ниже) |
 | MCP | `remote`-сервер, Git-репозиторий или `bundle` (загруженный MCPB-архив) | `mcp` |
-| Skill | Git-репозиторий или zip-архив | сканера пока нет |
+| Skill | Git-репозиторий или zip-архив | `agent_skills` |
 
 | Тип скана | Сервис | Что делает | Что нужно |
 |---|---|---|---|
@@ -132,6 +134,7 @@ flowchart TB
 | `system_prompt_leak` | `scanner-sysleak` | Метка вставляется в системное сообщение, атакующие промпты пытаются вытащить его; утечка = метка в ответе | То же |
 | `code_scan` | `scanner-promptfoo` | Анализ кода в облаке Promptfoo: находки с файлом, строкой и рекомендацией | Репозиторий агента, `PROMPTFOO_API_KEY` |
 | `ai_code_scan` | `scanner-semgrep` | Локальный Semgrep: AI-правила платформы + опциональные наборы Registry + свои YAML; код не покидает платформу | Репозиторий агента |
+| `agent_skills` | `scanner-skills` | Навыки (`SKILL.md`) проверяются движками Cisco skill-scanner и NVIDIA SkillSpector со своими YARA-правилами и проверкой frontmatter; вердикт `pass`/`review`/`block` считает платформа, навыки не запускаются. Детали — [docs/skills-scan-architecture.md](docs/skills-scan-architecture.md) | Skill-актив |
 | `mcp` | `scanner-mcp` | Координатор и семь движков: SAST (`semgrep`), YARA/эвристики Cisco, MCPRadar, Snyk (облако), динамические probes MCP-сессии | MCP-актив; детали — [docs/mcp-testing.md](docs/mcp-testing.md) |
 
 Выбор сканера и его параметры форма берёт из `GET /scanners`: каждый сервис

@@ -30,6 +30,12 @@ Agent Scanner проверяет LLM-агентов с вызовом инстр
 Semgrep по правилам для AI/LLM-кода (см. §7.5) — код при этом не покидает
 платформу.
 
+Так же статически проверяются **навыки (Agent Skills)**: платформа
+распаковывает zip или клонирует репозиторий skill-актива и проверяет каждый
+`SKILL.md`-навык движками Cisco skill-scanner и NVIDIA SkillSpector, а
+итоговый вердикт `pass`/`review`/`block` считает сама (см. §7.7 и
+[`skills-scan-architecture.md`](skills-scan-architecture.md)).
+
 ## 2. Компоненты
 
 ```
@@ -72,6 +78,7 @@ Semgrep по правилам для AI/LLM-кода (см. §7.5) — код п
 | `scanner-pyrit` | `scanner/pyrit`. Скан `pyrit_scan`: поднимает агента через `launcher` и атакует его целями PyRIT (промпты с конвертерами, RedTeaming, Crescendo) с моделью-судьёй. |
 | `scanner-promptfoo` | `scanner/promptfoo`. Скан `code_scan`: клонирует репозиторий агента, прогоняет `promptfoo code-scans`, пишет фазы/журнал/находки. Без kind и launcher. |
 | `scanner-semgrep` | `scanner/semgrep`. Скан `ai_code_scan`: клонирует репозиторий агента и прогоняет локальный Semgrep по правилам для AI/LLM-кода (свой набор в `rules/ai-security.yml` + опциональные наборы Registry и пользовательские YAML-правила). Без kind и launcher, код никуда не отправляется. |
+| `scanner-skills` | `scanner/skills`. Скан `agent_skills`: получает навыки skill-актива (zip из control-api или git-клон) и проверяет их движками Cisco skill-scanner и NVIDIA SkillSpector (CLI в отдельных процессах) со своими YARA-правилами и проверкой frontmatter; вердикт считает сам. Без kind, launcher и LLM. |
 | `launcher` | Собирает образ агента в кластере (git-clone + Kaniko) и запускает Pod с MITM-сайдкаром. Работает с внешним кластером по kubeconfig, без Docker-сокета. |
 | `web` | Дашборд (React/Vite). Текст интерфейса — на русском. |
 | `control-api-mitm-bridge`, `launcher-mitm-bridge` | `alpine/socat`-форвардеры, владеющие опубликованным на хост портом вместо dual-homed сервисов (особенность WSL2/Docker Desktop, см. `CLAUDE.md`). |
@@ -159,8 +166,8 @@ Semgrep по правилам для AI/LLM-кода (см. §7.5) — код п
 (часть отработала) или `failed` (ни один не отработал). `completed`
 сохраняется для остальных типов и исторических отчётов.
 Типы: `deep_team`, `pyrit_scan`, `code_scan`, `ai_code_scan`,
-`indirect_injection`, `system_prompt_leak` и `mcp` реализованы;
-`agent_skills` пока отклоняется.
+`indirect_injection`, `system_prompt_leak`, `mcp` и `agent_skills`
+реализованы.
 MCP выполняет координатор и отдельные контейнеры движков; детали — [mcp-testing.md](mcp-testing.md).
 
 `POST /scans/{id}/retry` создаёт и сразу запускает отдельную связанную попытку
@@ -183,7 +190,7 @@ MCP выполняет координатор и отдельные контей
 | `LLMModel` | Провайдер + модель + `base_url` + `api_key`. Хранится в открытом виде (принятый техдолг). Используется как модель-судья DeepTeam. |
 | `AgentConfig` | Актив «агент». `source`: `repository` (по умолчанию — сборка платформой из репозитория `git_repo_url`/`git_ref`/`git_access_token`, `dockerfile_path`, `env_example_path`, `env_vars`, `api_port`) или `remote` (уже запущенный вне платформы сервис: `remote_base_url` + `remote_headers` — произвольные заголовки авторизации, без сборки; трафик к LLM через прокси платформы не проходит — только динамическое тестирование). Общее: `agent_purpose` (назначение агента для DeepTeam), `interaction_mode` (`none`/`api`/`langgraph`), `api_config`, `langgraph_config`. Агента со сканированиями удалить нельзя (409): так клиент получает понятную ошибку вместо IntegrityError от внешнего ключа. |
 | `McpAsset` | Актив «MCP»: цель тестирования в `config` (форма `MCPTarget` — `remote`/`repository`/`bundle`); необязательный `deploy` (порт, команда запуска, env) — как поднять сервер из источника для динамического сканирования. При создании скана цель копируется в `Scan.config.target`. |
-| `SkillAsset` | Актив «skill»: git-репозиторий или zip-архив (BLOB, SHA-256). Сканера для skills пока нет — активы можно создавать, запуск сканов отклоняется. |
+| `SkillAsset` | Актив «skill»: git-репозиторий или zip-архив (BLOB, SHA-256). При создании скана `agent_skills` источник копируется в `Scan.config.source`; zip сканер скачивает через `GET /skill-assets/{id}/content`. Актив со сканированиями удалить нельзя. |
 | `Scan` | Параметры и состояние скана: `type`, ссылка на актив `asset_kind`/`asset_id` (строковые значения `'agent'/'mcp'/'skill'`; для агентов дублируется в `agent_config_id` — его читают сканеры и launcher), `status`, `session_id`, JSON `config`, JSON `results`, `phase`, `error`, а также метаданные запуска (`agent_namespace`, `agent_pod_name`, `build_job_name`, `built_image`), `started_at`/`finished_at`. |
 | `MCPArtifact` | Неизменяемый MCPB-архив: исходное имя и URI, SHA-256, размер, разобранный `manifest.json` и исходные байты в BLOB (`BYTEA`). Содержимое не отдаётся списковым API. |
 | `ScanLog` | Строка журнала скана: `level` (`info`/`success`/`error`), `phase`, `message`, `created_at`. |
@@ -201,6 +208,11 @@ MCP выполняет координатор и отдельные контей
   платформы выполняется всегда;
 - `indirect_injection`: `{"tasks": [...], "target_tools": [...], "payloads": [...], "repeats": <n>, "max_trials": <n>}`;
 - `system_prompt_leak`: `{"payloads": [...], "repeats": <n>, "max_trials": <n>}`;
+- `agent_skills`: `{"engines": ["cisco", "skillspector"], "source": {...}}` —
+  пустой `engines` означает оба движка; `source` копируется из `SkillAsset`
+  при создании скана: zip — `{kind, asset_id, archive_filename,
+  archive_sha256}`, git — `{kind, git_repo_url, git_ref, git_access_token}`
+  (токен в открытом виде, принятый техдолг);
 - `mcp`: `{"target": {...}, "scanner_ids": [...], "timeout_seconds": 30}`. `target` копируется из конфига `McpAsset` при создании скана: `target.kind` — `remote` (`server_url`, `transport`, `headers`, `verify_tls`), `repository` (`git_repo_url`, `git_ref`, `git_access_token`, `config_path`, `env`) или `bundle` (`artifact_id`, `user_config`). Пустой `scanner_ids` выбирает локальный набор по типу цели (без Snyk); сами `scanner_ids`/`timeout_seconds` форма берёт из схемы scanner-mcp. Токены, заголовки и переменные окружения хранятся в открытом виде в рамках принятого техдолга MVP.
 
 MCPB загружается через `POST /mcp-artifacts/upload` либо немедленно
@@ -217,7 +229,9 @@ API ограничивает размер, число файлов и распа
 `ai_code_scan` — `summary` и `findings` в том же формате, что и `code_scan`
 (§7.5),
 `indirect_injection` — `summary`/`by_tool`/`by_payload`/`trials` (§7.3),
-`system_prompt_leak` — `summary`/`by_payload`/`trials` (§7.4).
+`system_prompt_leak` — `summary`/`by_payload`/`trials` (§7.4),
+`agent_skills` — `verdict`, `summary`, `engines`, `skills[]` с находками
+(§7.7, полный формат — `SKILLSS.md` §2.7).
 `scan.type` в базе — строка, поэтому новый тип скана миграции не требует.
 
 ## 6. Прокси
@@ -438,6 +452,34 @@ Rust-тулчейн). Память PyRIT — in-memory
   (`<цель> / <стратегия>[/ конвертер]`), `passed` = агент отразил атаку,
   `overall_score` — доля отражённых атак среди оценённых.
 
+### 7.7. scanner-skills (анализ Agent Skills)
+
+`scanner/skills/app/` — FastAPI-сервис; подробности —
+[`skills-scan-architecture.md`](skills-scan-architecture.md), решения —
+`SKILLSS.md`. Навыки не исполняются, kind, launcher и LLM не нужны.
+
+Фазы: **В очереди** (не больше 2 сканов одновременно) → **Инициализация** →
+**Получение исходников** (zip: скачивание, сверка sha256, безопасная
+распаковка; git: `clone --depth 1`; поиск папок с `SKILL.md`, не больше 50)
+→ **Статический анализ** (навыки по очереди, движки одного навыка
+параллельно, таймаут 300 с на запуск движка) → **Сохранение результатов** →
+**Завершено**. Общий таймаут скана — 30 мин.
+
+- Движки — Cisco skill-scanner 2.1.0 и NVIDIA SkillSpector 2.11.2 (без LLM),
+  каждый в своём venv в `/opt/engines/*`, запуск CLI в отдельном процессе с
+  чистым окружением. Свои YARA-правила (`scanner/skills/rules/yara/`)
+  подключаются в оба: Cisco — пак `--trusted-rule-pack`, генерируемый при
+  сборке образа, SkillSpector — `--yara-rules-dir`. Проверка frontmatter
+  (`app/manifest_check.py`) — `hooks` с командами, неограниченный `Bash`,
+  `` !`…` `` в теле.
+- Вердикт по навыку: `block` — high+ от своих правил или проверки
+  frontmatter либо critical у обоих движков; `review` — прочие high/critical;
+  `pass` — иначе. Общий — худший; архив с признаками атаки на распаковщик
+  (выход за пределы, симлинки, шифрование, лимиты) — `block` без запуска
+  движков.
+- Упал один движок — `completed` с `complete: false`; не отработал ни один —
+  `failed`.
+
 ### 7.8. Единый отчёт, оценка устойчивости и выгрузки
 
 Форматы `Scan.results` у сканеров разные, поэтому control-api приводит их к
@@ -569,7 +611,11 @@ Rust-тулчейн). Память PyRIT — in-memory
   шифрования — осознанный техдолг MVP.
 - **`git_access_token` в логах.** См. §8.
 - **Нет автотестов.** Проверка — живая: поднять сервисы, прогнать HTTP/k8s
-  сценарий, посмотреть `/events` и логи Pod'ов.
+  сценарий, посмотреть `/events` и логи Pod'ов. Исключение — модуль Agent
+  Skills: pytest для `scanner/skills/**` и логики skill-активов в
+  `control-api/tests/` (см. `AGENTS.md`).
+- **Анализ навыков без LLM.** Чисто текстовые атаки в инструкциях навыка
+  не ловятся; `pass` означает «находок high и выше нет», а не «безопасен».
 - **Синтетические атаки DeepTeam зависят от провайдера.** Часть моделей
   отклоняет генерацию атак по политике безопасности провайдера.
 - **Анализ кода уходит в облако Promptfoo.** Модель анализа выбирает

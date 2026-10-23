@@ -135,6 +135,19 @@ REGISTRY: tuple[ScannerRegistration, ...] = (
         phases=("Инициализация", "Проверка MCP", "Сохранение результатов", "Завершено"),
         validate_config=_validate_mcp_config_hook,
     ),
+    ScannerRegistration(
+        requirements=frozenset({"code"}),  # анализ файлов скилла, ничего не запускается
+        type=ScanType.AGENT_SKILLS,
+        name="[статический анализ] Agent Skills",
+        description="Распаковывает или клонирует навыки (SKILL.md) и проверяет их движками Cisco skill-scanner и "
+        "NVIDIA SkillSpector со своими YARA-правилами; итоговый вердикт pass/review/block считает платформа. "
+        "Скиллы не запускаются.",
+        service="scanner-skills",
+        url_env="SCANNER_SKILLS_URL",
+        url_default="http://scanner-skills:8000",
+        asset_kinds=("skill",),
+        phases=("В очереди", "Инициализация", "Получение исходников", "Статический анализ", "Сохранение результатов", "Завершено"),
+    ),
 )
 
 _BY_TYPE: dict[ScanType, ScannerRegistration] = {reg.type: reg for reg in REGISTRY}

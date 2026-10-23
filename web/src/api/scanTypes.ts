@@ -25,7 +25,7 @@ export const SCAN_TYPE_LABELS: Record<ScanType, string> = {
   indirect_injection: "[динамическое тестирование] Косвенные инъекции",
   system_prompt_leak: "[динамическое тестирование] Утечка системного промпта",
   mcp: "[статический и динамический анализ] MCP",
-  agent_skills: "Agent Skills",
+  agent_skills: "[статический анализ] Agent Skills",
 };
 
 export function scanTypeLabel(type: string): string {
@@ -33,7 +33,7 @@ export function scanTypeLabel(type: string): string {
 }
 
 // Лейблы типов сканов и фазы приходят из реестра сканеров (GET /scanners);
-// здесь -- только fallback для типов без сканера (agent_skills).
+// здесь -- только fallback, пока реестр не ответил или сканер недоступен.
 
 export const SEVERITY_ORDER: CodeScanSeverity[] = ["critical", "high", "medium", "low"];
 

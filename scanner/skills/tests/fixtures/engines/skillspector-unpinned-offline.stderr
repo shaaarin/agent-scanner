@@ -1,0 +1,4 @@
+WARNING [skillspector.graph] Skipping analyzer semantic_developer_intent: required API key is missing
+WARNING [skillspector.graph] Skipping analyzer semantic_quality_policy: required API key is missing
+WARNING [skillspector.graph] Skipping analyzer semantic_security_discovery: required API key is missing
+WARNING [skillspector.nodes.analyzers.osv_client] OSV.dev API request failed, falling back to static data: [Errno -3] Temporary failure in name resolution

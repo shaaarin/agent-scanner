@@ -1,0 +1,5 @@
+# Зависимости NVIDIA SkillSpector v2.11.2 (/opt/engines/skillspector), D-17.
+# Сам SkillSpector ставится в Dockerfile из git по коммиту (--no-deps), здесь --
+# только его зависимости и backend сборки hatchling (--no-build-isolation), D-48.
+skillspector @ git+https://github.com/NVIDIA/skillspector@69dcdfb74487d361ba4c811d088cfdea2ff3a9dc
+hatchling
