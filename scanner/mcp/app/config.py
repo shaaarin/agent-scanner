@@ -114,6 +114,8 @@ def upgrade_flat(c):
         target["tools"] = c.get("tools")
     elif mode == "repository":
         target.update(git_repo_url=c.get("repository_url"), git_ref=c.get("git_ref", "main"))
+    elif mode == "bundle":
+        target.update(artifact_id=c.get("artifact_id"), user_config=c.get("user_config", {}))
     return dict(target=target, scanner_ids=[engine], timeout_seconds=300, probes=c.get("probes", []), allow_tool_calls=c.get("allow_tool_calls", False), allow_cloud=c.get("allow_cloud", False))
 
 def plan(c):
@@ -129,7 +131,8 @@ def plan(c):
         elif mode == "repository":
             task.update(repository_url=t["git_repo_url"], git_ref=t.get("git_ref", "main"), git_access_token=t.get("git_access_token"))
         elif mode == "bundle":
-            task["artifact_id"] = t["artifact_id"]
+            # The bundle runtime consumes these settings as its environment.
+            task.update(artifact_id=t["artifact_id"], user_config=t.get("user_config", {}))
         else:
             task.update({k: v for k,v in t.items() if k != "kind"})
         tasks.append(task)

@@ -106,11 +106,13 @@ export function ScanCreateModal({
       onClick={onClose}
     >
       <div
-        className="card"
-        style={{ padding: "2rem", minWidth: "500px", maxWidth: "760px", maxHeight: "90vh", overflow: "auto", width: "100%" }}
+        className="card scan-create-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="scan-create-title"
         onClick={(e) => e.stopPropagation()}
       >
-        <h2 style={{ marginBottom: "0.4rem" }}>Новое сканирование</h2>
+        <h2 id="scan-create-title" style={{ marginBottom: "0.4rem" }}>Новое сканирование</h2>
         <p style={{ margin: "0 0 1.5rem", color: "var(--text-500)", fontSize: 13 }}>Актив: {assetName}</p>
 
         {!loaded ? (
@@ -172,7 +174,7 @@ export function ScanCreateModal({
           </p>
         )}
 
-        <div style={{ display: "flex", gap: "0.6rem", marginTop: "1.5rem", justifyContent: "flex-end" }}>
+        <div className="scan-create-actions">
           <button className="btn btn-secondary" onClick={onClose} disabled={busy}>
             Отмена
           </button>

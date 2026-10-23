@@ -18,7 +18,7 @@ export default function App() {
         display: "grid",
         gridTemplateAreas: `"sidebar header" "sidebar main"`,
         gridTemplateRows: "var(--header-height) auto",
-        gridTemplateColumns: "var(--sidebar-width) auto",
+        gridTemplateColumns: "var(--sidebar-width) minmax(0, 1fr)",
         minHeight: "100dvh",
       }}
     >
@@ -27,11 +27,12 @@ export default function App() {
       <main
         style={{
           gridArea: "main",
+          minWidth: 0,
           background: "var(--background-warm)",
           minHeight: "calc(100dvh - var(--header-height))",
         }}
       >
-        <div style={{ maxWidth: 1200, margin: "0 auto", padding: "3.2rem" }}>
+        <div className="app-content">
           <Routes>
             <Route path="/" element={<Dashboard />} />
             <Route path="/help" element={<Help />} />

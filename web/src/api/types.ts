@@ -72,13 +72,16 @@ export interface AgentConfig {
 }
 
 export type ScanType = "deep_team" | "pyrit_scan" | "code_scan" | "ai_code_scan" | "indirect_injection" | "system_prompt_leak" | "mcp" | "agent_skills";
-export type ScanStatus = "pending" | "running" | "completed" | "failed";
+export type ScanStatus = "pending" | "running" | "completed" | "failed" | "partially_failed" | "success";
 export type AssetKind = "agent" | "mcp" | "skill";
 
 export interface Scan {
   id: number;
   name: string;
   type: ScanType;
+  retry_of_scan_id: number | null;
+  retry_root_scan_id: number | null;
+  retry_mode: ScanRetryMode | null;
   asset_kind: AssetKind | null;
   asset_id: number | null;
   agent_config_id: number | null;
@@ -97,6 +100,23 @@ export interface Scan {
   finished_at: string | null;
 }
 
+export type ScanRetryMode = "all" | "failed" | "engine";
+export interface ScanRetryOptions {
+  can_retry_all: boolean;
+  can_retry_failed: boolean;
+  active_scan_id: number | null;
+  engines: {id: string; name: string; status: "success" | "failed" | "pending"}[];
+  attempts: {
+    id: number;
+    retry_of_scan_id: number | null;
+    retry_mode: ScanRetryMode | null;
+    status: ScanStatus;
+    created_at: string;
+    started_at: string | null;
+    finished_at: string | null;
+  }[];
+}
+
 // Раздел «Активы»: единая запись из GET /assets.
 export interface Asset {
   kind: AssetKind;
@@ -109,6 +129,8 @@ export interface Asset {
 export interface McpDeploySettings {
   port?: number | null;
   command?: string | null;
+  dockerfile_path?: string | null;
+  mcp_path?: string | null;
   env: Record<string, string>;
 }
 
@@ -147,6 +169,7 @@ export interface SkillAsset {
 export type ScannerFieldType = "string" | "text" | "text_list" | "integer" | "boolean" | "enum" | "enum_multi" | "llm_model" | "json";
 
 export interface ScannerFieldOption {
+  reason?: string | null;
   value: string | number;
   label: string;
   available?: boolean;

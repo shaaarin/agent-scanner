@@ -1,39 +1,7 @@
 import { Link } from "react-router-dom";
 import { PageHeader } from "../components/PageHeader";
-import { Icon, type IconName } from "../components/Icon";
-
-const tiles: { to: string; label: string; description: string; icon: IconName }[] = [
-  {
-    to: "/assets",
-    label: "Активы",
-    description: "Агенты, MCP-серверы и skills: добавляйте активы и запускайте для них проверки.",
-    icon: "agent",
-  },
-  {
-    to: "/scans",
-    label: "Сканирования",
-    description: "Все запуски проверок: динамическое тестирование, анализ кода, MCP и инъекции.",
-    icon: "scans",
-  },
-  {
-    to: "/llm-models",
-    label: "LLM-модели",
-    description: "Провайдеры и модели, которые оценивают ответы агента и порождают атаки.",
-    icon: "llm",
-  },
-  {
-    to: "/library",
-    label: "Библиотека знаний",
-    description: "Материалы по безопасности ИИ: агенты, MCP, навыки и модели.",
-    icon: "library",
-  },
-  {
-    to: "/events",
-    label: "События",
-    description: "Запросы и ответы агента, перехваченные прокси, в реальном времени.",
-    icon: "events",
-  },
-];
+import { Icon } from "../components/Icon";
+import { navigation } from "../navigation";
 
 export function Dashboard() {
   return (
@@ -45,11 +13,11 @@ export function Dashboard() {
       <div
         style={{
           display: "grid",
-          gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))",
+          gridTemplateColumns: "repeat(auto-fill, minmax(min(220px, 100%), 1fr))",
           gap: "2.4rem",
         }}
       >
-        {tiles.map((tile) => (
+        {navigation.filter((item) => !item.end).map((tile) => (
           <Link
             key={tile.to}
             to={tile.to}

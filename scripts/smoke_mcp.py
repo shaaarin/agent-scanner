@@ -85,12 +85,12 @@ def run_case(name, target, scanner_params, expect):
         deadline = time.monotonic() + 120
         while time.monotonic() < deadline:
             job = api(f"/scans/{job['id']}")
-            if job["status"] in {"completed", "failed"}:
+            if job["status"] in {"completed", "success", "partially_failed", "failed"}:
                 break
             time.sleep(1)
         result = json.loads(job.get("results") or "{}")
         findings = result.get("findings", [])
-        passed = job["status"] == "completed" and expect(result)
+        passed = job["status"] in {"completed", "success"} and expect(result)
         return dict(case=name, scan_id=job["id"], status=job["status"], passed=passed, findings=len(findings), checks=result.get("checks"), error=job.get("error"), url=f"http://localhost:4173/scans/{job['id']}")
     finally:
         if job and job.get("id"):
@@ -125,7 +125,7 @@ def main():
     # Exercise existing branch upload/storage API and real MCPB source analysis.
     archive_data = io.BytesIO()
     with zipfile.ZipFile(archive_data, "w") as archive:
-        archive.writestr("manifest.json", json.dumps({"manifest_version": "0.3", "name": "mcp-smoke-fixture", "version": "1.0.0", "server": {"type": "python", "entry_point": "server.py"}}))
+        archive.writestr("manifest.json", json.dumps({"manifest_version": "0.3", "name": "mcp-smoke-fixture", "version": "1.0.0", "server": {"type": "python", "entry_point": "server.py", "mcp_config": {"command": "python", "args": ["server.py"]}}}))
         archive.writestr("server.py", VULNERABLE)
     boundary = "mcp-smoke-" + uuid.uuid4().hex
     body = ("--" + boundary + '\r\nContent-Disposition: form-data; name="file"; filename="fixture.mcpb"\r\nContent-Type: application/octet-stream\r\n\r\n').encode() + archive_data.getvalue() + ("\r\n--" + boundary + "--\r\n").encode()

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api, launcherApi } from "../api/client";
 import type { AgentConfig, AgentSource, InteractionMode } from "../api/types";
+import { AssetActions } from "../components/AssetActions";
 
 type EnvRow = { key: string; value: string };
 
@@ -984,15 +985,16 @@ export function AgentConfigs() {
       )}
 
       {repoConfigs.length > 0 && (
-        <div className="card" style={{ padding: 0, overflow: "hidden", marginBottom: remoteConfigs.length ? "2.4rem" : undefined }}>
-          <table>
+        <div className="card agent-table-card" style={{ padding: 0, marginBottom: remoteConfigs.length ? "2.4rem" : undefined }}>
+          <table className="agent-table">
+            <colgroup><col /><col style={{ width: "26%" }} /><col style={{ width: "12%" }} /><col style={{ width: "20%" }} /><col style={{ width: "14rem" }} /></colgroup>
             <thead>
               <tr>
-                <th style={{ width: "100%" }}>Название</th>
+                <th>Название</th>
                 <th>Репозиторий</th>
                 <th>Ветка</th>
                 <th>Взаимодействие</th>
-                <th></th>
+                <th>Действия</th>
               </tr>
             </thead>
             <tbody>
@@ -1016,11 +1018,8 @@ export function AgentConfigs() {
                   </td>
                   <td>{c.git_ref}</td>
                   <td><span className="badge badge-neutral">{interactionModeLabel[c.interaction_mode] ?? c.interaction_mode}</span></td>
-                  <td style={{ textAlign: "right" }}>
-                    <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-                      <button className="btn btn-secondary" onClick={() => handleEdit(c)}>Изменить</button>
-                      <button className="btn btn-secondary" onClick={() => handleDelete(c.id)}>Удалить</button>
-                    </div>
+                  <td>
+                    <AssetActions onEdit={() => handleEdit(c)} onDelete={() => handleDelete(c.id)} />
                   </td>
                 </tr>
               ))}
@@ -1030,16 +1029,16 @@ export function AgentConfigs() {
       )}
 
       {remoteConfigs.length > 0 && (
-        <div className="card" style={{ padding: 0, overflow: "hidden" }}>
-          {/* fixed-раскладка и три равные колонки: центр «Адрес» совпадает с
-              серединой между центрами «Название» и «Взаимодействие». */}
-          <table style={{ width: "100%", tableLayout: "fixed", borderCollapse: "collapse" }}>
+        <div className="card agent-table-card" style={{ padding: 0 }}>
+          {/* Колонка действий той же ширины и с теми же отступами, что у MCP и skills. */}
+          <table className="agent-table" style={{ width: "100%", tableLayout: "fixed", borderCollapse: "collapse" }}>
+            <colgroup><col /><col /><col /><col style={{ width: "14rem" }} /></colgroup>
             <thead>
               <tr>
-                <th style={{ width: "26%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>Название</th>
-                <th style={{ width: "26%", textAlign: "center" }}>Адрес</th>
-                <th style={{ width: "26%" }}>Взаимодействие</th>
-                <th style={{ width: "22%" }}></th>
+                <th style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>Название</th>
+                <th style={{ textAlign: "center" }}>Адрес</th>
+                <th>Взаимодействие</th>
+                <th>Действия</th>
               </tr>
             </thead>
             <tbody>
@@ -1062,11 +1061,8 @@ export function AgentConfigs() {
                     <code>{shortenBaseUrl(c.remote_base_url ?? "")}</code>
                   </td>
                   <td><span className="badge badge-neutral">{interactionModeLabel[c.interaction_mode] ?? c.interaction_mode}</span></td>
-                  <td style={{ textAlign: "right" }}>
-                    <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-                      <button className="btn btn-secondary" onClick={() => handleEdit(c)}>Изменить</button>
-                      <button className="btn btn-secondary" onClick={() => handleDelete(c.id)}>Удалить</button>
-                    </div>
+                  <td>
+                    <AssetActions onEdit={() => handleEdit(c)} onDelete={() => handleDelete(c.id)} />
                   </td>
                 </tr>
               ))}

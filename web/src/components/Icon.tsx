@@ -1,5 +1,6 @@
 export type IconName =
   | "home"
+  | "help"
   | "scans"
   | "templates"
   | "llm"
@@ -24,6 +25,8 @@ export function Icon({ name, size = 20 }: { name: IconName; size?: number }) {
     "aria-hidden": true,
   };
   switch (name) {
+    case "help":
+      return <svg {...p}><circle cx="12" cy="12" r="10" /><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 2-3 4" /><path d="M12 17h.01" /></svg>;
     case "home":
       return (
         <svg {...p}>

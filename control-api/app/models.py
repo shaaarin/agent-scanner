@@ -222,6 +222,8 @@ class ScanStatus(str, Enum):
     PENDING = "pending"
     RUNNING = "running"
     COMPLETED = "completed"
+    SUCCESS = "success"
+    PARTIALLY_FAILED = "partially_failed"
     FAILED = "failed"
 
 
@@ -252,6 +254,10 @@ class Scan(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     name: str = Field(index=True)
     type: ScanType
+    # A retry is a separate scan: previous reports and logs remain immutable.
+    retry_of_scan_id: Optional[int] = Field(default=None, foreign_key="scan.id", index=True)
+    retry_root_scan_id: Optional[int] = Field(default=None, foreign_key="scan.id", index=True)
+    retry_mode: Optional[str] = None  # all | failed | engine
     # Ссылка на актив из раздела «Активы» (см. AssetKind). Для агентов
     # дублируется в agent_config_id: все сканеры и launcher читают только его.
     # Колонка строковая и хранит ЗНАЧЕНИЯ ('agent'/'mcp'/'skill') -- иначе

@@ -60,11 +60,11 @@ function EnumMultiField({
   onToggle: (value: string) => void;
 }) {
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))", gap: "0.3rem 1.2rem" }}>
+    <div className={`scanner-options${field.name === "scanner_ids" ? " scanner-options--stacked" : ""}`} role="group" aria-label={field.label}>
       {(field.options ?? []).map((option, index) => {
         const disabled = option.available === false;
         return (
-          <label key={optionKey(option, index)} style={{ display: "flex", gap: "0.5rem", alignItems: "flex-start", fontSize: 13, opacity: disabled ? 0.55 : 1 }}>
+          <label key={optionKey(option, index)} className="scanner-option" style={{ color: disabled ? "var(--text-500)" : undefined }}>
             <input
               type="checkbox"
               checked={selected.includes(String(option.value))}
@@ -72,9 +72,12 @@ function EnumMultiField({
               onChange={() => onToggle(String(option.value))}
               style={{ marginTop: 2 }}
             />
-            <span>
+            <span className="scanner-option-text">
               {option.label}
               {disabled && <span style={{ color: "var(--text-500)" }}> (недоступен)</span>}
+              {disabled && option.reason && (
+                <span style={{ display: "block", color: "var(--status-negative)", fontSize: 12 }}>{option.reason}</span>
+              )}
               {option.description && (
                 <span style={{ display: "block", color: "var(--text-500)", fontSize: 12 }}>{option.description}</span>
               )}
