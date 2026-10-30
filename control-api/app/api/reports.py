@@ -225,7 +225,8 @@ def asset_summary(
         status_value = str(getattr(scan.status, "value", scan.status))
         status_counts[status_value] = status_counts.get(status_value, 0) + 1
         scan_type = str(getattr(scan.type, "value", scan.type))
-        if status_value == ScanStatus.COMPLETED.value and scan_type not in latest_by_type:
+        completed = status_value == ScanStatus.COMPLETED.value or (scan_type == "mcp" and status_value == ScanStatus.SUCCESS.value)
+        if completed and scan_type not in latest_by_type:
             latest_by_type[scan_type] = scan  # список уже отсортирован по дате убывающе
 
     by_severity = {severity: 0 for severity in reports.SEVERITIES}

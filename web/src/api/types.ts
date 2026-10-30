@@ -579,7 +579,7 @@ export interface AssetSummaryScanType {
 
 export interface AssetSummary {
   asset: { kind: AssetKind; id: number };
-  scans: { total: number; pending: number; running: number; completed: number; failed: number };
+  scans: { total: number; pending: number; running: number; completed: number; failed: number; success?: number; partially_failed?: number };
   findings_total: number;
   by_severity: Record<FindingSeverity, number>;
   rating: ScanRating;

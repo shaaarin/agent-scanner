@@ -12,6 +12,8 @@ def validate_flat(raw):
             raise ValueError("Выберите поддерживаемый MCP-сканер")
         mode = c.get("mode")
         engine = c["engine"]
+        if not isinstance(c.get("auto_probes", False), bool):
+            raise ValueError("auto_probes должен быть boolean")
         if mode not in {"snapshot", "remote", "source", "repository", "bundle"}:
             raise ValueError("Неизвестный режим MCP-сканирования")
         if engine == "semgrep":
@@ -63,7 +65,7 @@ def validate_flat(raw):
             for p in probes:
                 if not isinstance(p, dict) or not isinstance(p.get("tool"), str) or not isinstance(p.get("arguments"), dict):
                     raise ValueError("Пробный вызов: {tool: имя, arguments: объект}")
-            if engine == "mcp_dynamic" and probes and c.get("allow_tool_calls") is not True:
+            if engine == "mcp_dynamic" and (probes or c.get("auto_probes")) and c.get("allow_tool_calls") is not True:
                 raise ValueError("Подтвердите пробные вызовы на тестовом сервере")
         elif mode == "bundle":
             if not isinstance(c.get("artifact_id"), int):
@@ -80,7 +82,7 @@ def validate_flat(raw):
                 for p in probes:
                     if not isinstance(p, dict) or not isinstance(p.get("tool"), str) or not isinstance(p.get("arguments"), dict):
                         raise ValueError("Пробный вызов: {tool: имя, arguments: объект}")
-                if probes and c.get("allow_tool_calls") is not True:
+                if (probes or c.get("auto_probes")) and c.get("allow_tool_calls") is not True:
                     raise ValueError("Подтвердите пробные вызовы на сервере из MCPB")
             else:
                 raise ValueError("Для MCPB доступны Semgrep, сканеры каталога и динамическое тестирование")
@@ -116,7 +118,7 @@ def upgrade_flat(c):
         target.update(git_repo_url=c.get("repository_url"), git_ref=c.get("git_ref", "main"))
     elif mode == "bundle":
         target.update(artifact_id=c.get("artifact_id"), user_config=c.get("user_config", {}))
-    return dict(target=target, scanner_ids=[engine], timeout_seconds=300, probes=c.get("probes", []), allow_tool_calls=c.get("allow_tool_calls", False), allow_cloud=c.get("allow_cloud", False))
+    return dict(target=target, scanner_ids=[engine], timeout_seconds=300, probes=c.get("probes", []), auto_probes=c.get("auto_probes", False), allow_tool_calls=c.get("allow_tool_calls", False), allow_cloud=c.get("allow_cloud", False))
 
 def plan(c):
     c = upgrade_flat(c)
@@ -125,7 +127,7 @@ def plan(c):
     ids = c.get("scanner_ids") or DEFAULTS.get(mode, [])
     tasks = []
     for engine in ids:
-        task = dict(engine=engine, mode=mode, timeout_seconds=c.get("timeout_seconds", 300), allow_cloud=c.get("allow_cloud", False), allow_tool_calls=c.get("allow_tool_calls", False), probes=c.get("probes", []))
+        task = dict(engine=engine, mode=mode, timeout_seconds=c.get("timeout_seconds", 300), allow_cloud=c.get("allow_cloud", False), allow_tool_calls=c.get("allow_tool_calls", False), probes=c.get("probes", []), auto_probes=c.get("auto_probes", False))
         if mode == "remote":
             task.update(server_url=t["server_url"], transport="streamable_http" if t.get("transport", "auto") == "auto" else t["transport"], headers=t.get("headers", {}), verify_tls=t.get("verify_tls", True))
         elif mode == "repository":
