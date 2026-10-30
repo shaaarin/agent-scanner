@@ -4,6 +4,7 @@ import ipaddress
 import json
 import os
 import socket
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -264,10 +265,22 @@ async def run_dynamic(session, c):
         checks.append(dict(name=f"Вызов {i+1}: {probe['tool']}", status="passed" if passed else "failed", evidence=text[:4000]))
         if not passed:
             findings.append(dict(rule_id="mcp.dynamic.probe-expectation", severity="medium", title="Ответ инструмента не соответствует проверке", target=probe["tool"], evidence=text[:4000], recommendation="Проверьте контракт инструмента и валидность заданного теста.", category="dynamic"))
+    automatic = None
+    if c.get("auto_probes"):
+        if not c.get("allow_tool_calls"):
+            raise ValueError("Автоматические вызовы не подтверждены")
+        from app.auto_probes import run_automatic
+        automatic = await run_automatic(session, first, c.get("_dynamic_deadline", time.monotonic() + max(0, c.get("timeout_seconds", 30)-5)))
+        checks.extend(automatic["checks"])
+        findings.extend(automatic["findings"])
     second = await list_tools(session)
     fingerprint = lambda x: hashlib.sha256(json.dumps(x, sort_keys=True).encode()).hexdigest()
     stable = fingerprint(first) == fingerprint(second)
     checks.append(dict(name="Стабильность каталога в сессии", status="passed" if stable else "failed", evidence=f"{fingerprint(first)} → {fingerprint(second)}"))
     if not stable:
         findings.append(dict(rule_id="mcp.dynamic.catalog-drift", severity="medium", title="Каталог изменился в пределах сессии", target=c.get("server_url") or "bundle", evidence="Различаются имена, описания или схемы tools/list. Изменение может быть легитимным.", recommendation="Сравните снимки и проверьте доверие к обновлениям инструментов.", category="dynamic"))
-    return dict(findings=findings, checks=checks, tools_checked=len(first), coverage="Действительный MCP-сеанс и только явно заданные calls. Не проверяет исполнение агентом промпт-инъекций или все классы уязвимостей.")
+    report = dict(findings=findings, checks=checks, tools_checked=len(first), coverage="Действительный MCP-сеанс, каталог и явно заданные calls. Не проверяет исполнение агентом промпт-инъекций или все классы уязвимостей.")
+    if automatic is not None:
+        report["automatic_checks"] = automatic["automatic_checks"]
+        report["coverage"] += " Включены автоматические Python/JavaScript-проверки строковых аргументов по inputSchema (до 20 вызовов, без I/O). Пропуски, ошибки и лимиты отражены в automatic_checks; вычисление кода может быть предусмотрено контрактом инструмента."
+    return report

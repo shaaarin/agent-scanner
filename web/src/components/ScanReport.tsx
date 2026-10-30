@@ -118,11 +118,18 @@ function FindingsTable({ findings }: { findings: ReportFinding[] }) {
           ))}
         </select>
       </div>
-      <table style={{ width: "100%", borderCollapse: "collapse" }}>
+      <div style={{ overflowX: "auto" }}>
+      <table style={{ width: "100%", minWidth: "62rem", tableLayout: "fixed", borderCollapse: "collapse" }}>
+        <colgroup>
+          <col style={{ width: "11rem" }} />
+          <col />
+          <col style={{ width: "22%" }} />
+          <col style={{ width: "9rem" }} />
+        </colgroup>
         <thead>
           <tr style={{ borderBottom: "0.1rem solid var(--separator-default)" }}>
             <th style={{ padding: "0.6rem", textAlign: "left" }}>Серьёзность</th>
-            <th style={{ padding: "0.6rem", textAlign: "left", width: "100%" }}>Находка</th>
+            <th style={{ padding: "0.6rem", textAlign: "left" }}>Находка</th>
             <th style={{ padding: "0.6rem", textAlign: "left" }}>Где</th>
             <th style={{ padding: "0.6rem", textAlign: "right" }}>Детали</th>
           </tr>
@@ -132,15 +139,15 @@ function FindingsTable({ findings }: { findings: ReportFinding[] }) {
             <Fragment key={finding.id}>
               <tr style={{ borderBottom: expanded === finding.id ? "none" : "0.1rem solid var(--separator-default)" }}>
                 <td style={{ padding: "0.6rem" }}>
-                  <span className={`badge ${SEVERITY_BADGES[finding.severity]}`}>{SEVERITY_LABELS[finding.severity]}</span>
+                  <span className={`badge ${SEVERITY_BADGES[finding.severity]}`} style={{ whiteSpace: "nowrap" }}>{SEVERITY_LABELS[finding.severity]}</span>
                 </td>
-                <td style={{ padding: "0.6rem" }}>
+                <td style={{ padding: "0.6rem", overflowWrap: "anywhere" }}>
                   {finding.title}
                   {finding.rule_id && (
                     <div style={{ fontSize: 12, color: "var(--text-500)", fontFamily: "ui-monospace, monospace" }}>{finding.rule_id}</div>
                   )}
                 </td>
-                <td style={{ padding: "0.6rem", fontSize: "0.8rem", fontFamily: "ui-monospace, monospace", wordBreak: "break-all" }}>
+                <td style={{ padding: "0.6rem", fontSize: "0.8rem", fontFamily: "ui-monospace, monospace", overflowWrap: "anywhere" }}>
                   {location(finding)}
                 </td>
                 <td style={{ padding: "0.6rem", textAlign: "right" }}>
@@ -185,6 +192,7 @@ function FindingsTable({ findings }: { findings: ReportFinding[] }) {
           ))}
         </tbody>
       </table>
+      </div>
     </>
   );
 }
@@ -256,7 +264,7 @@ export function ScanReportView({ report, children }: { report: ScanReport; child
         )}
       </div>
 
-      {(metrics.checks_errored || metrics.checks_skipped) && (
+      {Boolean(metrics.checks_errored || metrics.checks_skipped) && (
         <p style={{ color: "var(--text-500)", fontSize: 13, marginTop: 0 }}>
           Не учтено в оценке: с ошибкой {metrics.checks_errored ?? 0}, без результата {metrics.checks_skipped ?? 0}.
         </p>

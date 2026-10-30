@@ -31,7 +31,7 @@ const RATING_HINTS: Record<string, string> = {
   protected: "Выполненные проверки не выявили значимых проблем.",
   partial: "Есть проблемы средней серьёзности или часть атак удалась.",
   unsafe: "Есть находки высокой/критической серьёзности или значительная доля успешных атак.",
-  unknown: "Завершённых сканирований с результатом пока нет.",
+  unknown: "Недостаточно данных для оценки: проверьте наличие завершённых сканов и ошибки/пропуски проверок.",
 };
 
 function percent(value: number | null): string {
@@ -86,7 +86,8 @@ export function AssetSummary({ kind, id, refreshKey = 0 }: { kind: AssetKind; id
           <div style={{ color: "var(--text-600)", fontSize: "0.85rem" }}>Сканирований</div>
           <div style={{ fontSize: "1.8rem", fontWeight: 700, marginTop: "0.4rem" }}>{scans.total}</div>
           <div style={{ color: "var(--text-500)", fontSize: 12, marginTop: "0.2rem" }}>
-            завершено {scans.completed}
+            завершено {scans.completed + (scans.success ?? 0)}
+            {scans.partially_failed ? `, частично выполнено ${scans.partially_failed}` : ""}
             {scans.running ? `, выполняется ${scans.running}` : ""}
             {scans.failed ? `, с ошибкой ${scans.failed}` : ""}
             {scans.pending ? `, ожидает ${scans.pending}` : ""}
@@ -124,7 +125,7 @@ export function AssetSummary({ kind, id, refreshKey = 0 }: { kind: AssetKind; id
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
             <thead>
               <tr style={{ borderBottom: "0.1rem solid var(--separator-default)" }}>
-                <th style={{ padding: "0.6rem", textAlign: "left", width: "100%" }}>Тип</th>
+                <th style={{ padding: "0.6rem", textAlign: "left" }}>Тип</th>
                 <th style={{ padding: "0.6rem", textAlign: "left" }}>Оценка</th>
                 <th style={{ padding: "0.6rem", textAlign: "right" }}>Находок</th>
                 <th style={{ padding: "0.6rem", textAlign: "right" }}>Устойчивость</th>

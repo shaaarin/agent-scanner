@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import time
 from pathlib import Path
 from urllib.parse import quote, urlsplit
 
@@ -158,6 +159,7 @@ async def run_mcp_dynamic(c):
     """Динамика: для remote -- по HTTP, для MCPB -- деплой по манифесту
     (установка зависимостей, запуск сервера) и сеанс по stdio."""
     import tempfile
+    c = {**c, "_dynamic_deadline": time.monotonic() + max(0, c.get("timeout_seconds", 30)-5)}
     from app.target import dynamic, run_dynamic, stdio_session_for_bundle
     if c["mode"] == "bundle":
         with tempfile.TemporaryDirectory(prefix="mcp-bundle-") as tmp:

@@ -165,6 +165,7 @@ class MCPScanConfig(BaseModel):
 
     target: MCPTarget
     probes: list[dict] = Field(default_factory=list)
+    auto_probes: bool = False
     allow_tool_calls: bool = False
     allow_cloud: bool = False
     scanner_ids: list[str] = Field(default_factory=list)

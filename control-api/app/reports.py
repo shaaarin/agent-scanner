@@ -402,7 +402,7 @@ def _mcp_runs(results: dict) -> list[dict]:
 def _from_mcp(results: dict) -> tuple[dict, list[dict]]:
     """MCP: находки движков плюс их же явные проверки (`checks`)."""
     findings = []
-    passed = failed = 0
+    passed = failed = errored = skipped = 0
     index = 0
     for run in _mcp_runs(results):
         engine = str(run.get("engine_name") or "mcp")
@@ -411,6 +411,10 @@ def _from_mcp(results: dict) -> tuple[dict, list[dict]]:
                 continue
             if str(check.get("status")) == "passed":
                 passed += 1
+            elif str(check.get("status")) == "error":
+                errored += 1
+            elif str(check.get("status")) == "skipped":
+                skipped += 1
             else:
                 failed += 1
         for raw in run.get("findings") or []:
@@ -441,10 +445,10 @@ def _from_mcp(results: dict) -> tuple[dict, list[dict]]:
     metrics = _metrics(
         "mixed",
         findings=findings,
-        passed=passed if (passed or failed) else None,
-        failed=failed if (passed or failed) else None,
-        errored=0 if (passed or failed) else None,
-        skipped=0 if (passed or failed) else None,
+        passed=passed if (passed or failed or errored or skipped) else None,
+        failed=failed if (passed or failed or errored or skipped) else None,
+        errored=errored if (passed or failed or errored or skipped) else None,
+        skipped=skipped if (passed or failed or errored or skipped) else None,
     )
     return metrics, findings
 
@@ -479,7 +483,12 @@ def build(scan: Scan) -> dict:
 
     findings.sort(key=lambda f: (SEVERITIES.index(f["severity"]), f["title"]))
     status = str(getattr(scan.status, "value", scan.status))
-    rating = rate(metrics) if status == "completed" else "unknown"
+    completed = status == "completed" or (scan_type == "mcp" and status == "success")
+    rating = rate(metrics) if completed else "unknown"
+    if scan_type == "mcp" and rating == "protected" and (metrics.get("checks_errored") or metrics.get("checks_skipped")):
+        # An interrupted/unavailable automatic check cannot prove protection.
+        # Keep unsafe/partial findings visible even when other checks failed.
+        rating = "unknown"
 
     return {
         "version": REPORT_VERSION,
