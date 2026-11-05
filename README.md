@@ -44,7 +44,7 @@ flowchart TB
 
         eng["7 движков MCP:<br/>cisco-yara · cisco-readiness · cisco-prompt-defense<br/>mcpradar · snyk · semgrep · mcp-dynamic"]
 
-        launcher["launcher<br/>:8400 · Kaniko + k8s"]
+        launcher["launcher<br/>Kaniko + k8s"]
         proxy["proxy (mitmproxy)<br/>:8100"]
     end
 
@@ -150,11 +150,11 @@ flowchart TB
 | `postgres` | внутренний | Хранилище (том `agent-scanner_control-api-pg-data`) |
 | `web` | 4173 | Дашборд React/Vite. **Весь текст интерфейса — на русском** |
 | `proxy` | 8100 | mitmproxy-аддон: перехват и журналирование трафика агента к LLM, подкладывание инъекций |
-| `launcher` | 8400 | Сборка образа агента (git-clone + Kaniko) и запуск Pod'а с MITM-сайдкаром в kind |
+| `launcher` | внутренний | Сборка образа агента (git-clone + Kaniko) и запуск Pod'а с MITM-сайдкаром в kind; браузер его не вызывает — разбор репозитория в мастере агента проксирует control-api |
 | `scanner-deepteam`, `scanner-pyrit`, `scanner-indirect`, `scanner-sysleak` | внутренние | Динамические сканеры агентов (`scanner/<имя>`) |
 | `scanner-promptfoo`, `scanner-semgrep` | внутренние | Статический анализ кода; kind не нужен |
 | `scanner-mcp` + 7 движков | внутренние | Координатор MCP-сканов и контейнеры движков (общий образ) |
-| `control-api-mitm-bridge`, `launcher-mitm-bridge` | — | `socat`-форвардеры опубликованных портов (quirk WSL2/Docker Desktop) |
+| `control-api-mitm-bridge` | — | `socat`-форвардер опубликованного порта control-api (quirk WSL2/Docker Desktop) |
 
 Каталоги `generator/` и `interactor/` — легаси прежней архитектуры, в compose
 не входят.

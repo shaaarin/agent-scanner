@@ -12,7 +12,13 @@ import httpx
 
 CONTROL_API_URL = os.environ.get("CONTROL_API_URL", "http://control-api:8000")
 
-_client = httpx.Client(base_url=CONTROL_API_URL, timeout=30.0)
+_client = httpx.Client(
+    base_url=CONTROL_API_URL,
+    timeout=30.0,
+    # Машинный контур: общий секрет сервисов платформы (control-api
+    # принимает запросы только с валидным X-Internal-Token или сессией).
+    headers={"X-Internal-Token": os.environ.get("INTERNAL_API_TOKEN", "")},
+)
 logger = logging.getLogger(__name__)
 ATTEMPTS = 5
 REQUEST_TIMEOUT = httpx.Timeout(5.0, connect=2.0)

@@ -3,7 +3,7 @@ FROM python:3.12-slim
 WORKDIR /srv
 
 COPY pyproject.toml ./
-RUN pip install --no-cache-dir fastapi "uvicorn[standard]" sqlmodel httpx pyyaml alembic python-multipart "psycopg[binary]"
+RUN pip install --no-cache-dir fastapi "uvicorn[standard]" sqlmodel httpx pyyaml alembic python-multipart "psycopg[binary]" itsdangerous
 
 COPY app ./app
 COPY scripts ./scripts

@@ -3,12 +3,22 @@ function makeClient(baseUrl: string) {
     const isFormData = options.body instanceof FormData;
     const res = await fetch(`${baseUrl}${path}`, {
       ...options,
+      // Сессионная cookie ставится после входа по логину и паролю и должна
+      // уходить с каждым запросом (в dev API на другом порту -- кросс-домен).
+      credentials: "include",
       headers: {
         ...(!isFormData ? { "Content-Type": "application/json" } : {}),
         ...(options.headers ?? {}),
       },
     });
     if (!res.ok) {
+      // Сессия истекла или входа не было: сообщаем приложению централизованно,
+      // чтобы показался экран входа даже из фоновых опросов (логи сканов,
+      // события), которые глотают ошибки. Запросы /auth/* -- не повод: их 401
+      // означает «ещё не вошли» и обрабатывается AuthContext'ом напрямую.
+      if (res.status === 401 && !path.startsWith("/auth/")) {
+        window.dispatchEvent(new CustomEvent("auth:unauthorized"));
+      }
       const text = await res.text();
       // FastAPI отдаёт причину в {"detail": "..."} -- показываем её, а не сырой JSON.
       let detail = text;
@@ -42,7 +52,16 @@ function makeClient(baseUrl: string) {
 
 // Базовый URL нужен не только клиенту: выгрузки (SARIF, диалоги атак)
 // открываются прямой ссылкой на эндпоинт, чтобы браузер скачал файл сам.
-export const CONTROL_API_URL = import.meta.env.VITE_CONTROL_API_URL ?? "http://localhost:8000";
+//
+// По умолчанию адрес выводится из адреса страницы: дашборд, открытый по IP
+// стенда или через SSH-туннель, обращается к API на опубликованном порту
+// того же хоста (8000) -- пересборка при смене адреса не нужна. Явный
+// build arg VITE_CONTROL_API_URL имеет приоритет. Launcher браузер не видит:
+// разбор репозитория в мастере агента control-api проксирует сам
+// (control-api/app/api/repo.py).
+const pageHost = window.location.hostname || "localhost";
+
+export const CONTROL_API_URL =
+  import.meta.env.VITE_CONTROL_API_URL || `http://${pageHost}:8000`;
 
 export const api = makeClient(CONTROL_API_URL);
-export const launcherApi = makeClient(import.meta.env.VITE_LAUNCHER_URL ?? "http://localhost:8400");

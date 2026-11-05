@@ -39,6 +39,35 @@ OpenAI, OpenRouter, self-hosted vLLM/Ollama и т.п.
 зависимостей через OSV.dev; без него скан проходит с предупреждением.
 Первая сборка образа долгая (два venv движков, ~1,6 ГБ).
 
+### Авторизация (логин + пароль)
+
+По умолчанию (`SESSION_SECRET_KEY` пуст) авторизация выключена: все эндпоинты
+открыты, интерфейс работает без входа. Чтобы включить вход:
+
+```sh
+# .env
+SESSION_SECRET_KEY=$(python -c "import secrets; print(secrets.token_urlsafe(48))")
+INTERNAL_API_TOKEN=$(python -c "import secrets; print(secrets.token_urlsafe(32))")
+ADMIN_LOGIN=admin
+ADMIN_PASSWORD=<придумайте>
+```
+
+- `SESSION_SECRET_KEY` — ключ подписи сессионной cookie; при включённой
+  авторизации обязателен (иначе сессии не переживают рестарт).
+- `ADMIN_LOGIN`/`ADMIN_PASSWORD` — системный администратор: создаётся при
+  старте, если его ещё нет; видит и делает всё во всех организациях.
+- `INTERNAL_API_TOKEN` — секрет машинного контура: одно значение раздаётся
+  control-api и всем сервисам, которые в него ходят (сканеры, launcher,
+  mitm-прокси в подах). Внутренние эндпоинты (`PATCH /scans/{id}`, логи,
+  `POST /events`, выгрузка MCPB и т.п.) без этого токена недоступны.
+- `CORS_ORIGINS` — origin'ы браузера (dev: `http://localhost:4173` и
+  `http://localhost:5173`); cookie не работает с `allow_origins=["*"]`.
+
+Вход: `POST /auth/login {login, password}`, регистрация открыта:
+`POST /auth/register`. Пользователи, организации и роли (admin / editor /
+reader внутри организации) — раздел «Организации» в дашборде. Подробнее
+о модели доступа — `docs/architecture.md` §1.1.
+
 ## 2. Запуск стека
 
 ```
@@ -53,11 +82,21 @@ docker compose up -d --build
 | `postgres` | только внутренняя сеть (`postgres:5432`), данные в томе `control-api-pg-data` |
 | `web` | http://localhost:4173 |
 | `proxy` | http://localhost:8100 |
-| `launcher` | http://localhost:8400 |
+| `launcher` | только внутренняя сеть (`launcher:8000`): браузер его не вызывает — разбор репозитория в мастере агента control-api проксирует сам |
 
 Сканеры (`scanner-deepteam`, `scanner-promptfoo`, `scanner-semgrep`,
 `scanner-skills` и остальные) работают без опубликованного порта — `control-api` обращается к ним по
 внутренней сети. Проверка: `curl localhost:8000/health`.
+
+Доступ с другой машины: порты публикуются на всех интерфейсах, а дашборд сам
+выводит адрес API из адреса страницы (`web/src/api/client.ts`), поэтому
+`http://<IP-стенда>:4173` работает без пересборки (учтите CORS_ORIGINS, если
+включена авторизация). Если порты стенда закрыты файрволом, пробросьте их
+туннелем и откройте `http://localhost:4173` у себя:
+
+```
+ssh -L 4173:localhost:4173 -L 8000:localhost:8000 <пользователь>@<стенд>
+```
 
 > Если стек поднимался до разделения сканеров, удалите старый контейнер
 > `scanner`: `docker compose up -d --build --remove-orphans`.
@@ -314,9 +353,9 @@ psql -U agent_scanner -d agent_scanner -c '\dt'`.
   обращаться.
 - **Плавающий опубликованный порт** (`ERR_EMPTY_RESPONSE`, connection
   reset) на WSL2/Docker Desktop. Это quirk dev-окружения: для
-  `control-api`/`launcher` опубликованный порт владеет `socat`-мост, а не
-  сам сервис. Если проблема всё же появилась — обращайтесь к сервису
-  изнутри сети: `docker compose exec control-api python3 -c "import httpx; print(httpx.get('http://localhost:8000/health').text)"`.
+  `control-api` опубликованный порт владеет `socat`-мост, а не сам сервис.
+  Если проблема всё же появилась — обращайтесь к сервису изнутри сети:
+  `docker compose exec control-api python3 -c "import httpx; print(httpx.get('http://localhost:8000/health').text)"`.
 - **`can't pull image` при запуске агента.** Образ прокси нужно положить в
   локальный реестр (раздел 3).
 - **Провайдер отвечает `MissingSessionID` / `x-opencode-session`.** Значит,

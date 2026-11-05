@@ -5,6 +5,7 @@ export type IconName =
   | "templates"
   | "llm"
   | "agent"
+  | "org"
   | "events"
   | "findings"
   | "fuzz"
@@ -104,6 +105,15 @@ export function Icon({ name, size = 20 }: { name: IconName; size?: number }) {
           <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
           <line x1="9" y1="7" x2="15" y2="7" />
           <line x1="9" y1="11" x2="14" y2="11" />
+        </svg>
+      );
+    case "org":
+      return (
+        <svg {...p}>
+          <path d="M3 21h18" />
+          <path d="M5 21V5a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v16" />
+          <path d="M17 8h2a2 2 0 0 1 2 2v11" />
+          <path d="M9 7h2M9 11h2M9 15h2" />
         </svg>
       );
     case "library":

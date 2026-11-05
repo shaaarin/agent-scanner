@@ -11,4 +11,5 @@ dependencies = [
     "alembic>=1.13",
     "python-multipart>=0.0.12",
     "psycopg[binary]>=3.2",
+    "itsdangerous>=2.1",
 ]

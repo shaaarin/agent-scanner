@@ -9,7 +9,13 @@ CONTROL_API_URL = os.environ.get("CONTROL_API_URL", "http://control-api:8000")
 CACHE_TTL_SECONDS = float(os.environ.get("ACTIVE_SCAN_CACHE_TTL", "2"))
 
 _cache: dict[str, tuple[float, Optional[dict]]] = {}
-_client = httpx.AsyncClient(base_url=CONTROL_API_URL, timeout=3.0)
+_client = httpx.AsyncClient(
+    base_url=CONTROL_API_URL,
+    timeout=3.0,
+    # Машинный контур: общий секрет сервисов платформы (control-api
+    # принимает запросы только с валидным X-Internal-Token или сессией).
+    headers={"X-Internal-Token": os.environ.get("INTERNAL_API_TOKEN", "")},
+)
 
 
 async def get_active_scan(session_id: str) -> Optional[dict]:

@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import ValidationError
 from sqlmodel import Session, delete, or_, select
 
+from app.auth.deps import accessible_org_ids, ensure_org_access, get_caller, Caller, require_machine
 from app.db import engine, get_session
 from app.models import (
     AgentConfig,
@@ -16,6 +17,7 @@ from app.models import (
     InjectionTrial,
     MCPArtifact,
     McpAsset,
+    OrgRole,
     Scan,
     ScanLog,
     ScanLogLevel,
@@ -167,8 +169,10 @@ def list_scans(
     asset_id: Optional[int] = Query(None),
     scan_type: Optional[ScanType] = Query(None),
     status: Optional[ScanStatus] = Query(None),
+    caller: Caller = Depends(get_caller),
 ) -> list[Scan]:
-    """List all scans with optional filters."""
+    """List all scans with optional filters. Обычный пользователь видит сканы
+    своих организаций; машинный контур и системный админ -- все."""
     with Session(engine) as session:
         statement = select(Scan)
         if agent_config_id is not None:
@@ -181,30 +185,14 @@ def list_scans(
             statement = statement.where(Scan.type == scan_type)
         if status is not None:
             statement = statement.where(Scan.status == status)
+        org_ids = accessible_org_ids(session, caller)
+        if org_ids is not None:
+            statement = statement.where(Scan.organization_id.in_(org_ids))
         statement = statement.order_by(Scan.created_at.desc())
         return session.exec(statement).all()
 
 
-@router.get("")
-def list_scans(
-    agent_config_id: Optional[int] = Query(None),
-    scan_type: Optional[ScanType] = Query(None),
-    status: Optional[ScanStatus] = Query(None),
-) -> list[Scan]:
-    """List all scans with optional filters."""
-    with Session(engine) as session:
-        statement = select(Scan)
-        if agent_config_id is not None:
-            statement = statement.where(Scan.agent_config_id == agent_config_id)
-        if scan_type is not None:
-            statement = statement.where(Scan.type == scan_type)
-        if status is not None:
-            statement = statement.where(Scan.status == status)
-        statement = statement.order_by(Scan.created_at.desc())
-        return session.exec(statement).all()
-
-
-@router.get("/active")
+@router.get("/active", dependencies=[Depends(require_machine)])
 def get_active_scan(session_id: str = Query(...)) -> Optional[dict]:
     """Get active scan for a session (for proxy to know which scan to log events for)."""
     with Session(engine) as session:
@@ -228,9 +216,10 @@ def get_active_scan(session_id: str = Query(...)) -> Optional[dict]:
         }
 
 
-@router.get("/{scan_id}/agent-config")
+@router.get("/{scan_id}/agent-config", dependencies=[Depends(require_machine)])
 def get_scan_agent_config(scan_id: int) -> dict:
-    """Get agent config for a scan (for DeepTeam to know which agent it's testing)."""
+    """Get agent config for a scan (for DeepTeam to know which agent it's testing).
+    Внутри env-переменные агента -- только сервисам платформы."""
     with Session(engine) as session:
         scan = session.get(Scan, scan_id)
         if not scan:
@@ -260,9 +249,13 @@ def get_scan_agent_config(scan_id: int) -> dict:
 
 
 @router.post("")
-def create_scan(payload: ScanCreate) -> Scan:
+def create_scan(
+    payload: ScanCreate,
+    caller: Caller = Depends(get_caller),
+) -> Scan:
     """Создать скан внутри актива (раздел «Активы»). Применимость сканера к
-    виду актива и валидность конфига определяются реестром сканеров."""
+    виду актива и валидность конфига определяются реестром сканеров.
+    Организация скана -- организация актива."""
     registration = find(payload.type)
     if registration is None:
         raise HTTPException(status_code=400, detail=f"Для типа сканирования {payload.type} сканер пока не подключён")
@@ -281,6 +274,7 @@ def create_scan(payload: ScanCreate) -> Scan:
         asset = session.get(asset_model, payload.asset_id)
         if asset is None:
             raise HTTPException(status_code=422, detail=f"Актив («{payload.asset_kind}», id={payload.asset_id}) не найден")
+        ensure_org_access(caller, session, asset.organization_id, min_role=OrgRole.EDITOR)
 
         # Remote-агент не собирается платформой и его трафик к LLM не проходит
         # через наш прокси: анализ кода без репозитория, а инъекциям некуда
@@ -310,6 +304,7 @@ def create_scan(payload: ScanCreate) -> Scan:
         scan = Scan(
             name=payload.name.strip(),
             type=payload.type,
+            organization_id=asset.organization_id,
             asset_kind=payload.asset_kind,
             asset_id=payload.asset_id,
             # Сканеры и launcher читают только agent_config_id.
@@ -327,16 +322,20 @@ def create_scan(payload: ScanCreate) -> Scan:
 
 
 @router.get("/{scan_id}")
-def get_scan(scan_id: int) -> Scan:
+def get_scan(
+    scan_id: int,
+    caller: Caller = Depends(get_caller),
+) -> Scan:
     """Get a scan by ID."""
     with Session(engine) as session:
         scan = session.get(Scan, scan_id)
         if not scan:
             raise HTTPException(status_code=404, detail="Scan not found")
+        ensure_org_access(caller, session, scan.organization_id)
         return scan
 
 
-@router.patch("/{scan_id}")
+@router.patch("/{scan_id}", dependencies=[Depends(require_machine)])
 def update_scan(scan_id: int, payload: ScanUpdate) -> Scan:
     """Update scan status/progress/launch metadata (used by scanner/launcher)."""
     with Session(engine) as session:
@@ -352,12 +351,17 @@ def update_scan(scan_id: int, payload: ScanUpdate) -> Scan:
 
 
 @router.delete("/{scan_id}")
-def delete_scan(scan_id: int) -> dict:
-    """Delete a scan and its progress log."""
+def delete_scan(
+    scan_id: int,
+    caller: Caller = Depends(get_caller),
+) -> dict:
+    """Delete a scan and its progress log. Удаление -- для администратора
+    организации (история проверок -- не только «своё»)."""
     with Session(engine) as session:
         scan = session.get(Scan, scan_id)
         if not scan:
             raise HTTPException(status_code=404, detail="Scan not found")
+        ensure_org_access(caller, session, scan.organization_id, min_role=OrgRole.ADMIN)
 
         # Use the same family lock as retry creation so a parent cannot be
         # removed while another request is attaching a new attempt to it.
@@ -383,7 +387,10 @@ def delete_scan(scan_id: int) -> dict:
 
 
 @router.post("/{scan_id}/start")
-def start_scan(scan_id: int) -> Scan:
+def start_scan(
+    scan_id: int,
+    caller: Caller = Depends(get_caller),
+) -> Scan:
     """Mark a scan RUNNING and hand it off to the scanner service for its type
     (see scanner_registry). The scanner works in the background; the logs it
     writes are what the scan detail page polls."""
@@ -391,6 +398,7 @@ def start_scan(scan_id: int) -> Scan:
         scan = session.exec(select(Scan).where(Scan.id == scan_id).with_for_update()).first()
         if not scan:
             raise HTTPException(status_code=404, detail="Scan not found")
+        ensure_org_access(caller, session, scan.organization_id, min_role=OrgRole.EDITOR)
         if scan.status != ScanStatus.PENDING:
             raise HTTPException(status_code=400, detail="Scan can only be started from PENDING status")
         registration = find(scan.type)
@@ -435,22 +443,31 @@ def start_scan(scan_id: int) -> Scan:
 
 
 @router.get("/{scan_id}/retries")
-def scan_retries(scan_id: int) -> dict:
+def scan_retries(
+    scan_id: int,
+    caller: Caller = Depends(get_caller),
+) -> dict:
     """Available retry actions and lightweight history; no reports duplicated."""
     with Session(engine) as session:
         scan = session.get(Scan, scan_id)
         if not scan:
             raise HTTPException(status_code=404, detail="Scan not found")
+        ensure_org_access(caller, session, scan.organization_id)
         return _retry_options(session, scan)
 
 
 @router.post("/{scan_id}/retry")
-def retry_scan(scan_id: int, payload: ScanRetry) -> Scan:
+def retry_scan(
+    scan_id: int,
+    payload: ScanRetry,
+    caller: Caller = Depends(get_caller),
+) -> Scan:
     """Create and start a separate attempt using the saved scan configuration."""
     with Session(engine) as session:
         source = session.get(Scan, scan_id)
         if not source:
             raise HTTPException(status_code=404, detail="Scan not found")
+        ensure_org_access(caller, session, source.organization_id, min_role=OrgRole.EDITOR)
         root_id = source.retry_root_scan_id or source.id
         # Serialize requests across the whole attempt family, including
         # retries requested simultaneously from different history pages.
@@ -493,7 +510,8 @@ def retry_scan(scan_id: int, payload: ScanRetry) -> Scan:
             if target.get("kind") == "bundle" and session.get(MCPArtifact, target.get("artifact_id")) is None:
                 raise HTTPException(status_code=422, detail="Исходный MCPB-архив больше не доступен")
         attempt = Scan(
-            name=source.name, type=source.type, asset_kind=source.asset_kind, asset_id=source.asset_id,
+            name=source.name, type=source.type, organization_id=source.organization_id,
+            asset_kind=source.asset_kind, asset_id=source.asset_id,
             agent_config_id=source.agent_config_id, session_id=str(uuid4()), config=config_json,
             retry_of_scan_id=source.id, retry_root_scan_id=root_id, retry_mode=payload.mode,
         )
@@ -504,7 +522,7 @@ def retry_scan(scan_id: int, payload: ScanRetry) -> Scan:
         attempt_id = attempt.id
     # The committed pending row blocks concurrent retries before dispatch.
     # Dispatch failures become a separate failed attempt, leaving the source.
-    return start_scan(attempt_id)
+    return start_scan(attempt_id, caller)
 
 
 @router.get("/{scan_id}/logs")
@@ -512,9 +530,14 @@ def list_scan_logs(
     scan_id: int,
     after_id: int = Query(default=0),
     limit: int = Query(default=500, le=2000),
+    caller: Caller = Depends(get_caller),
     session: Session = Depends(get_session),
 ) -> list[ScanLog]:
     """Incremental progress log: pass the last `id` you've seen as `after_id`."""
+    scan = session.get(Scan, scan_id)
+    if not scan:
+        raise HTTPException(status_code=404, detail="Scan not found")
+    ensure_org_access(caller, session, scan.organization_id)
     statement = (
         select(ScanLog)
         .where(ScanLog.scan_id == scan_id)
@@ -525,7 +548,7 @@ def list_scan_logs(
     return session.exec(statement).all()
 
 
-@router.post("/{scan_id}/logs")
+@router.post("/{scan_id}/logs", dependencies=[Depends(require_machine)])
 def create_scan_log(
     scan_id: int,
     payload: ScanLogCreate,
@@ -542,7 +565,7 @@ def create_scan_log(
     return log
 
 
-@router.post("/{scan_id}/complete")
+@router.post("/{scan_id}/complete", dependencies=[Depends(require_machine)])
 def complete_scan(scan_id: int, results: str) -> Scan:
     """Mark a scan as completed with results."""
     with Session(engine) as session:
@@ -562,7 +585,7 @@ def complete_scan(scan_id: int, results: str) -> Scan:
         return scan
 
 
-@router.post("/{scan_id}/fail")
+@router.post("/{scan_id}/fail", dependencies=[Depends(require_machine)])
 def fail_scan(scan_id: int, error: str) -> Scan:
     """Mark a scan as failed."""
     with Session(engine) as session:

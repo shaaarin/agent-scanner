@@ -9,9 +9,10 @@ import json
 from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session, select
 
+from app.auth.deps import accessible_org_ids, ensure_org_access, get_caller, Caller
 from app.db import get_session
 from app.mcp_config import validate_mcp_config
-from app.models import MCPArtifact, McpAsset, Scan
+from app.models import MCPArtifact, McpAsset, OrgRole, Scan
 from app.schemas import McpAssetCreate, McpAssetUpdate
 
 router = APIRouter(prefix="/mcp-assets", tags=["mcp-assets"])
@@ -31,7 +32,12 @@ def _validate_target(target: dict) -> None:
 
 
 @router.post("", response_model=McpAsset)
-def create_mcp_asset(payload: McpAssetCreate, session: Session = Depends(get_session)):
+def create_mcp_asset(
+    payload: McpAssetCreate,
+    caller: Caller = Depends(get_caller),
+    session: Session = Depends(get_session),
+):
+    ensure_org_access(caller, session, payload.organization_id, min_role=OrgRole.EDITOR)
     existing = session.exec(select(McpAsset).where(McpAsset.name == payload.name)).first()
     if existing:
         raise HTTPException(status_code=409, detail="Актив с таким именем уже существует")
@@ -41,6 +47,7 @@ def create_mcp_asset(payload: McpAssetCreate, session: Session = Depends(get_ses
     _validate_target(target)
     asset = McpAsset(
         name=payload.name,
+        organization_id=payload.organization_id,
         description=payload.description,
         config=target,
         deploy=payload.deploy.model_dump(exclude_none=True) if payload.deploy else None,
@@ -52,23 +59,41 @@ def create_mcp_asset(payload: McpAssetCreate, session: Session = Depends(get_ses
 
 
 @router.get("", response_model=list[McpAsset])
-def list_mcp_assets(session: Session = Depends(get_session)):
-    return session.exec(select(McpAsset).order_by(McpAsset.created_at.desc())).all()
+def list_mcp_assets(
+    caller: Caller = Depends(get_caller),
+    session: Session = Depends(get_session),
+):
+    query = select(McpAsset).order_by(McpAsset.created_at.desc())
+    org_ids = accessible_org_ids(session, caller)
+    if org_ids is not None:
+        query = query.where(McpAsset.organization_id.in_(org_ids))
+    return session.exec(query).all()
 
 
 @router.get("/{asset_id}", response_model=McpAsset)
-def get_mcp_asset(asset_id: int, session: Session = Depends(get_session)):
+def get_mcp_asset(
+    asset_id: int,
+    caller: Caller = Depends(get_caller),
+    session: Session = Depends(get_session),
+):
     asset = session.get(McpAsset, asset_id)
     if not asset:
         raise HTTPException(status_code=404, detail="MCP-актив не найден")
+    ensure_org_access(caller, session, asset.organization_id)
     return asset
 
 
 @router.put("/{asset_id}", response_model=McpAsset)
-def update_mcp_asset(asset_id: int, payload: McpAssetUpdate, session: Session = Depends(get_session)):
+def update_mcp_asset(
+    asset_id: int,
+    payload: McpAssetUpdate,
+    caller: Caller = Depends(get_caller),
+    session: Session = Depends(get_session),
+):
     asset = session.get(McpAsset, asset_id)
     if not asset:
         raise HTTPException(status_code=404, detail="MCP-актив не найден")
+    ensure_org_access(caller, session, asset.organization_id, min_role=OrgRole.EDITOR)
     # As in create: persist JSON-compatible values, not Pydantic HttpUrl.
     updates = payload.model_dump(mode="json", exclude_unset=True)
     if "deploy" in updates:
@@ -92,10 +117,15 @@ def update_mcp_asset(asset_id: int, payload: McpAssetUpdate, session: Session = 
 
 
 @router.delete("/{asset_id}", status_code=204)
-def delete_mcp_asset(asset_id: int, session: Session = Depends(get_session)):
+def delete_mcp_asset(
+    asset_id: int,
+    caller: Caller = Depends(get_caller),
+    session: Session = Depends(get_session),
+):
     asset = session.get(McpAsset, asset_id)
     if not asset:
         raise HTTPException(status_code=404, detail="MCP-актив не найден")
+    ensure_org_access(caller, session, asset.organization_id, min_role=OrgRole.ADMIN)
     scans = session.exec(
         select(Scan).where(Scan.asset_kind == "mcp").where(Scan.asset_id == asset_id)
     ).all()

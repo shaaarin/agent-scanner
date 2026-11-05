@@ -7,3 +7,7 @@ dist/
 *.db
 .env
 .claude/
+
+# Локальные артефакты тестирования auth и файлов ZCode-сессий
+.auth-test-*
+.zcode/

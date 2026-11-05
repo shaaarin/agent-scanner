@@ -6,7 +6,9 @@ COPY package.json package-lock.json ./
 RUN npm install
 
 COPY . .
-ARG VITE_CONTROL_API_URL=http://localhost:8000
+# Пустой по умолчанию: адрес API фронтенд выводит из адреса страницы
+# (web/src/api/client.ts). Задаётся явно для нестандартной раскладки портов.
+ARG VITE_CONTROL_API_URL=""
 ENV VITE_CONTROL_API_URL=$VITE_CONTROL_API_URL
 RUN npm run build
 

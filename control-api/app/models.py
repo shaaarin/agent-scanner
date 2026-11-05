@@ -2,12 +2,87 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Optional
 
-from sqlalchemy import Column, JSON, LargeBinary, String, Text
+from sqlalchemy import Column, JSON, LargeBinary, String, Text, UniqueConstraint
 from sqlmodel import Field, SQLModel
 
 
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+class OrgRole(str, Enum):
+    """Роль участника организации: читает / редактирует активы и сканы /
+    управляет организацией (участники, удаления). Системный админ -- отдельный
+    флаг `User.is_superadmin`, он видит и делает всё во всех организациях."""
+
+    ADMIN = "admin"
+    EDITOR = "editor"
+    READER = "reader"
+
+
+class User(SQLModel, table=True):
+    """Пользователь платформы: логин + пароль (scrypt-хэш).
+
+    У приглашённого участника пароля может не быть: запись создаётся «тихо»
+    при приглашении в организацию, а пароль появляется при регистрации с этим
+    логином (или его задаёт администратор прямо при приглашении)."""
+
+    __tablename__ = "users"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    login: str = Field(index=True, unique=True)  # всегда в нижнем регистре
+    password_hash: Optional[str] = None  # NULL, пока пользователь не задал пароль
+    display_name: Optional[str] = None
+    email: Optional[str] = None
+    is_superadmin: bool = False
+    created_at: datetime = Field(default_factory=utcnow)
+    last_login_at: Optional[datetime] = None
+
+
+class Organization(SQLModel, table=True):
+    """Владелец активов, моделей и сканов. Доступ к содержимому -- только у
+    участников организации (Membership), плюс системный админ."""
+
+    __tablename__ = "organizations"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    name: str = Field(index=True)
+    description: Optional[str] = Field(default=None, sa_column=Column(Text))
+    created_by_user_id: Optional[int] = Field(default=None, foreign_key="users.id")
+    created_at: datetime = Field(default_factory=utcnow)
+
+
+class Membership(SQLModel, table=True):
+    """Участие пользователя в организации с одной из ролей OrgRole."""
+
+    __tablename__ = "memberships"
+    __table_args__ = (UniqueConstraint("user_id", "org_id", name="uq_membership_user_org"),)
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: int = Field(foreign_key="users.id", index=True)
+    org_id: int = Field(foreign_key="organizations.id", index=True)
+    role: OrgRole = OrgRole.READER
+    created_at: datetime = Field(default_factory=utcnow)
+
+
+class Invite(SQLModel, table=True):
+    """Одноразовая ссылка-приглашение в организацию.
+
+    Админ организации создаёт ссылку с ролью (`token` -- секрет в URL), передаёт
+    её вне платформы; приглашённый после входа принимает приглашение
+    (`POST /invites/{token}/accept`) и получает Membership. Одноразовое: после
+    принятия помечается used; админ может отозвать ссылку удалением."""
+
+    __tablename__ = "invites"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    org_id: int = Field(foreign_key="organizations.id", index=True)
+    role: OrgRole = OrgRole.READER
+    token: str = Field(index=True, unique=True)
+    created_by_user_id: Optional[int] = Field(default=None, foreign_key="users.id")
+    created_at: datetime = Field(default_factory=utcnow)
+    used_by_user_id: Optional[int] = Field(default=None, foreign_key="users.id")
+    used_at: Optional[datetime] = None
 
 
 class ProviderType(str, Enum):
@@ -26,6 +101,7 @@ class LLMModel(SQLModel, table=True):
 
     id: Optional[int] = Field(default=None, primary_key=True)
     name: str = Field(index=True, unique=True)
+    organization_id: int = Field(foreign_key="organizations.id", index=True)
     provider_type: ProviderType = ProviderType.OPENAI
     base_url: str
     api_key: str
@@ -68,6 +144,7 @@ class AgentConfig(SQLModel, table=True):
 
     id: Optional[int] = Field(default=None, primary_key=True)
     name: str = Field(index=True, unique=True)
+    organization_id: int = Field(foreign_key="organizations.id", index=True)
     # Колонка строковая и хранит значения ('repository'/'remote'), как
     # Scan.asset_kind -- иначе расходятся ORM, миграция и строковые фильтры.
     source: AgentSource = Field(
@@ -167,6 +244,7 @@ class McpAsset(SQLModel, table=True):
 
     id: Optional[int] = Field(default=None, primary_key=True)
     name: str = Field(index=True, unique=True)
+    organization_id: int = Field(foreign_key="organizations.id", index=True)
     description: Optional[str] = Field(default=None, sa_column=Column(Text))
     # Форма MCPTarget: {"kind": "remote|repository|bundle", ...}
     config: dict = Field(default_factory=dict, sa_column=Column(JSON))
@@ -189,6 +267,7 @@ class SkillAsset(SQLModel, table=True):
 
     id: Optional[int] = Field(default=None, primary_key=True)
     name: str = Field(index=True, unique=True)
+    organization_id: int = Field(foreign_key="organizations.id", index=True)
     description: Optional[str] = Field(default=None, sa_column=Column(Text))
     source: SkillSource = SkillSource.REPOSITORY
     # source=repository: HTTPS-репозиторий (токен -- принятый техдолг MVP,
@@ -236,6 +315,7 @@ class MCPArtifact(SQLModel, table=True):
     """
 
     id: Optional[int] = Field(default=None, primary_key=True)
+    organization_id: int = Field(foreign_key="organizations.id", index=True)
     original_filename: str
     source_type: str  # upload | url
     source_url: Optional[str] = None
@@ -253,6 +333,8 @@ class Scan(SQLModel, table=True):
 
     id: Optional[int] = Field(default=None, primary_key=True)
     name: str = Field(index=True)
+    # Организация-владелец; при создании скана наследуется от актива.
+    organization_id: int = Field(foreign_key="organizations.id", index=True)
     type: ScanType
     # A retry is a separate scan: previous reports and logs remain immutable.
     retry_of_scan_id: Optional[int] = Field(default=None, foreign_key="scan.id", index=True)

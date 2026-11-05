@@ -2,6 +2,67 @@ export type ProviderType = "openai" | "anthropic";
 export type InteractionMode = "none" | "api" | "langgraph";
 export type AgentSource = "repository" | "remote";
 
+// --- авторизация и организации (логин+пароль + ролевая модель) ---------------
+
+export type OrgRole = "admin" | "editor" | "reader";
+
+export interface CurrentUser {
+  id: number;
+  login: string;
+  display_name: string | null;
+  email: string | null;
+  is_superadmin: boolean;
+}
+
+export interface MyMembership {
+  org_id: number;
+  org_name: string;
+  role: OrgRole;
+}
+
+// GET /auth/me
+export interface MeResponse {
+  auth_enabled: boolean;
+  user: CurrentUser | null;
+  memberships: MyMembership[];
+}
+
+export interface OrganizationRecord {
+  id: number;
+  name: string;
+  description: string | null;
+  created_at: string;
+  my_role: OrgRole | null;
+  members_count: number;
+}
+
+export interface MemberRecord {
+  user_id: number;
+  login: string;
+  display_name: string | null;
+  email: string | null;
+  is_superadmin: boolean;
+  role: OrgRole;
+  last_login_at: string | null;
+}
+
+// Одноразовая ссылка-приглашение в организацию (админ создаёт, адрес --
+// /invite/<token>).
+export interface InviteRecord {
+  id: number;
+  role: OrgRole;
+  token: string;
+  created_at: string;
+  used: boolean;
+}
+
+// Публичная информация по ссылке (GET /invites/{token}, без auth).
+export interface InviteInfo {
+  org_name: string;
+  role: OrgRole;
+  valid: boolean;
+}
+
 export interface TrafficEvent {
   id: number;
   session_id: string;
@@ -35,6 +96,7 @@ export interface LLMModel {
 
 export interface LLMModelListItem {
   id: number;
+  organization_id: number;
   name: string;
   provider_type: ProviderType;
   base_url: string;
@@ -122,6 +184,7 @@ export interface Asset {
   kind: AssetKind;
   id: number;
   name: string;
+  organization_id: number;
   description: string | null;
   created_at: string;
 }
@@ -136,6 +199,7 @@ export interface McpDeploySettings {
 
 export interface McpAsset {
   id: number;
+  organization_id: number;
   name: string;
   description: string | null;
   config: MCPTarget;
@@ -144,6 +208,7 @@ export interface McpAsset {
 }
 
 export interface McpAssetCreate {
+  organization_id: number;
   name: string;
   description?: string | null;
   config: MCPTarget;
@@ -154,6 +219,7 @@ export type SkillSource = "repository" | "zip";
 
 export interface SkillAsset {
   id: number;
+  organization_id: number;
   name: string;
   description: string | null;
   source: SkillSource;
@@ -486,6 +552,95 @@ export interface SystemPromptLeakResults {
   };
   by_payload: SysLeakPayloadGroup[];
   trials: SysLeakTrialResult[];
+  error?: string;
+}
+
+// Scan.results для type = "garak" (пишет scanner-garak).
+export interface GarakProbeEval {
+  probe: string;
+  detector: string;
+  passed: number;
+  total: number;
+}
+
+export interface GarakHit {
+  probe: string;
+  detector: string;
+  score?: number;
+  prompt: string;
+  output: string;
+}
+
+export interface GarakResults {
+  engine: "garak";
+  engine_version?: string;
+  summary: {
+    probes_run: number;
+    detectors_run: number;
+    evaluated: number;
+    passed: number;
+    flagged: number;
+    flag_rate: number;
+    hits_shown: number;
+  };
+  probes: GarakProbeEval[];
+  hits: GarakHit[];
+  error?: string;
+}
+
+// Scan.results для type = "promptfoo_redteam" (пишет scanner-promptfoo-redteam).
+export interface RedteamPluginRow {
+  plugin: string;
+  tests: number;
+  failed: number;
+}
+
+export interface RedteamFinding {
+  plugin: string;
+  severity?: string | null;
+  prompt: string;
+  output: string;
+  error?: string;
+}
+
+export interface PromptfooRedteamResults {
+  engine: "promptfoo-redteam";
+  engine_version?: string;
+  purpose?: string | null;
+  summary: {
+    tests: number;
+    passed: number;
+    failed: number;
+    fail_rate: number;
+    findings_shown: number;
+  };
+  plugins: RedteamPluginRow[];
+  findings: RedteamFinding[];
+  error?: string;
+}
+
+// Результаты PyRIT в формате по-прогонного отчёта (компонент PyritResults).
+export type PyritOutcome = "success" | "failure" | "error" | "undetermined";
+
+export interface PyritAttackRow {
+  technique: string;
+  objective: string;
+  outcome: PyritOutcome;
+  response: string;
+  rationale?: string | null;
+  outcome_reason?: string | null;
+}
+
+export interface PyritResults {
+  engine: "pyrit";
+  engine_version?: string;
+  summary: {
+    asr: number;
+    runs: number;
+    success: number;
+    failure: number;
+  };
+  attacks: PyritAttackRow[];
   error?: string;
 }
 

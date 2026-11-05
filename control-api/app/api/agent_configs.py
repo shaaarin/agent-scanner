@@ -1,15 +1,21 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session, select
 
+from app.auth.deps import accessible_org_ids, ensure_org_access, get_caller, Caller
 from app.db import get_session
-from app.models import AgentConfig, Scan
+from app.models import AgentConfig, OrgRole, Scan
 from app.schemas import AgentConfigCreate, AgentConfigUpdate
 
 router = APIRouter(prefix="/agent-configs", tags=["agent-configs"])
 
 
 @router.post("", response_model=AgentConfig)
-def create_agent_config(payload: AgentConfigCreate, session: Session = Depends(get_session)):
+def create_agent_config(
+    payload: AgentConfigCreate,
+    caller: Caller = Depends(get_caller),
+    session: Session = Depends(get_session),
+):
+    ensure_org_access(caller, session, payload.organization_id, min_role=OrgRole.EDITOR)
     existing = session.exec(select(AgentConfig).where(AgentConfig.name == payload.name)).first()
     if existing:
         raise HTTPException(status_code=409, detail="agent config name already exists")
@@ -21,23 +27,41 @@ def create_agent_config(payload: AgentConfigCreate, session: Session = Depends(g
 
 
 @router.get("", response_model=list[AgentConfig])
-def list_agent_configs(session: Session = Depends(get_session)):
-    return session.exec(select(AgentConfig)).all()
+def list_agent_configs(
+    caller: Caller = Depends(get_caller),
+    session: Session = Depends(get_session),
+):
+    query = select(AgentConfig).order_by(AgentConfig.name)
+    org_ids = accessible_org_ids(session, caller)
+    if org_ids is not None:
+        query = query.where(AgentConfig.organization_id.in_(org_ids))
+    return session.exec(query).all()
 
 
 @router.get("/{agent_config_id}", response_model=AgentConfig)
-def get_agent_config(agent_config_id: int, session: Session = Depends(get_session)):
+def get_agent_config(
+    agent_config_id: int,
+    caller: Caller = Depends(get_caller),
+    session: Session = Depends(get_session),
+):
     agent_config = session.get(AgentConfig, agent_config_id)
     if not agent_config:
         raise HTTPException(status_code=404, detail="agent config not found")
+    ensure_org_access(caller, session, agent_config.organization_id)
     return agent_config
 
 
 @router.put("/{agent_config_id}", response_model=AgentConfig)
-def update_agent_config(agent_config_id: int, payload: AgentConfigUpdate, session: Session = Depends(get_session)):
+def update_agent_config(
+    agent_config_id: int,
+    payload: AgentConfigUpdate,
+    caller: Caller = Depends(get_caller),
+    session: Session = Depends(get_session),
+):
     agent_config = session.get(AgentConfig, agent_config_id)
     if not agent_config:
         raise HTTPException(status_code=404, detail="agent config not found")
+    ensure_org_access(caller, session, agent_config.organization_id, min_role=OrgRole.EDITOR)
     for key, value in payload.model_dump(exclude_unset=True).items():
         setattr(agent_config, key, value)
     session.add(agent_config)
@@ -47,10 +71,15 @@ def update_agent_config(agent_config_id: int, payload: AgentConfigUpdate, sessio
 
 
 @router.delete("/{agent_config_id}", status_code=204)
-def delete_agent_config(agent_config_id: int, session: Session = Depends(get_session)):
+def delete_agent_config(
+    agent_config_id: int,
+    caller: Caller = Depends(get_caller),
+    session: Session = Depends(get_session),
+):
     agent_config = session.get(AgentConfig, agent_config_id)
     if not agent_config:
         raise HTTPException(status_code=404, detail="agent config not found")
+    ensure_org_access(caller, session, agent_config.organization_id, min_role=OrgRole.ADMIN)
     # Понятный 409 вместо IntegrityError от внешнего ключа: без этой проверки
     # сканы агента остались бы без конфигурации и не открывались бы и не запускались.
     scans = session.exec(select(Scan).where(Scan.agent_config_id == agent_config_id)).all()
