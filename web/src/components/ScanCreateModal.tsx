@@ -8,6 +8,13 @@ import { cleanConfig, initialConfig, isConfigComplete, ScannerConfigForm } from 
 // отфильтрован по виду актива) и динамическая форма полей из config_schema.
 // Никаких настроек сканеров в коде фронта нет.
 
+// crypto.randomUUID есть только в secure context (HTTPS или localhost),
+// а дашборд бывает открыт по http://<ip> — нужен запасной вариант.
+const randomId = () =>
+  typeof crypto.randomUUID === "function"
+    ? crypto.randomUUID()
+    : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+
 export function ScanCreateModal({
   assetKind,
   assetId,
@@ -65,7 +72,7 @@ export function ScanCreateModal({
         type: selected.type,
         asset_kind: assetKind,
         asset_id: assetId,
-        session_id: `scan-${crypto.randomUUID()}`,
+        session_id: `scan-${randomId()}`,
         config: cleanConfig(selected.config_schema?.fields ?? [], config),
       });
       if (start) {
