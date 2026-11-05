@@ -6,12 +6,17 @@ own container -- separate from, and ahead of, the actual in-cluster
 git-clone+Kaniko build Job (which only needs to run once the full env_vars
 dict is already known).
 """
+import re
 import shutil
 import subprocess
 import tempfile
 from pathlib import Path
 
 from app.git_auth import authenticated_git_url
+
+# Полный SHA коммита: нельзя склоонировать через `clone --branch`,
+# забирается fetch'ем по SHA (см. _clone_ref).
+COMMIT_SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 
 
 class EnvDiscoveryError(Exception):
@@ -35,23 +40,16 @@ def _parse_env_file(text: str) -> dict[str, str]:
 def discover_env_defaults(
     git_repo_url: str, git_ref: str, env_example_path: str, access_token: str | None = None
 ) -> dict[str, str]:
-    """Shallow-clones the repo to a temp dir and parses env_example_path's
-    KEY=value lines. Returns {} (never raises) if the clone or the file
-    itself fails -- env_example_path is a convenience, not a hard
-    requirement, so a missing/renamed file shouldn't block a launch.
+    """Shallow-clones the repo (ветка/тег или полный SHA коммита) to a temp
+    dir and parses env_example_path's KEY=value lines. Returns {} (never
+    raises) if the clone or the file itself fails -- env_example_path is a
+    convenience, not a hard requirement, so a missing/renamed file shouldn't
+    block a launch.
     """
     tmpdir = tempfile.mkdtemp(prefix="agent-scanner-env-discovery-")
     try:
         clone_url = authenticated_git_url(git_repo_url, access_token)
-        result = subprocess.run(
-            ["git", "clone", "--branch", git_ref, "--depth", "1", clone_url, tmpdir],
-            capture_output=True,
-            text=True,
-            timeout=60,
-        )
-        if result.returncode != 0:
-            stderr = result.stderr.replace(clone_url, git_repo_url) if access_token else result.stderr
-            print(f"[env_discovery] clone failed, skipping env-defaults discovery: {stderr}")
+        if not _clone_ref(tmpdir, git_ref.strip(), clone_url, git_repo_url):
             return {}
 
         env_file = Path(tmpdir) / env_example_path
@@ -65,6 +63,48 @@ def discover_env_defaults(
         return {}
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def _clone_ref(dest: str, git_ref: str, clone_url: str, git_repo_url: str) -> bool:
+    """`git clone --depth 1` ветки/тега; полный SHA коммита -- fetch по SHA
+    (нужна поддержка uploadpack.allowAnySHA1InWant на сервере), при отказе
+    резерв -- полный clone и checkout. False при любой неудаче (вызывающий
+    код решает, что делать -- здесь тихо пропустить discovery)."""
+    if not COMMIT_SHA_RE.fullmatch(git_ref):
+        result = subprocess.run(
+            ["git", "clone", "--branch", git_ref, "--depth", "1", clone_url, dest],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    else:
+        result = None
+        for args in (
+            ["init", "--quiet", dest],
+            ["-C", dest, "remote", "add", "origin", clone_url],
+            ["-C", dest, "fetch", "--quiet", "--depth", "1", "origin", git_ref],
+            ["-C", dest, "checkout", "--quiet", "--detach", "FETCH_HEAD"],
+        ):
+            result = subprocess.run(["git", *args], capture_output=True, text=True, timeout=60)
+            if result.returncode != 0:
+                break
+        else:
+            return True
+        # Сервер не отдал коммит по SHA -- резерв: полный clone и checkout.
+        shutil.rmtree(dest, ignore_errors=True)
+        result = subprocess.run(["git", "clone", "--quiet", clone_url, dest], capture_output=True, text=True, timeout=60)
+        if result.returncode == 0:
+            result = subprocess.run(
+                ["git", "-C", dest, "checkout", "--quiet", "--detach", git_ref],
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+    if result.returncode != 0:
+        stderr = result.stderr.replace(clone_url, git_repo_url) if clone_url != git_repo_url else result.stderr
+        print(f"[env_discovery] clone failed, skipping env-defaults discovery: {stderr}")
+        return False
+    return True
 
 
 def merge_env_defaults(env_vars: dict[str, str], discovered: dict[str, str]) -> dict[str, str]:

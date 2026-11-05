@@ -50,6 +50,33 @@ def test_clone_by_tag(origin, tmp_path, allow_file):
     assert len(repo.clone(f"file://{origin}", "v1", None, tmp_path / "c")) == 40
 
 
+def _sha_of(path) -> str:
+    result = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=path, check=True, capture_output=True, text=True
+    )
+    return result.stdout.strip()
+
+
+def test_clone_by_commit_sha(origin, tmp_path, allow_file):
+    # Полный SHA нельзя склоонировать через --branch: должен сработать
+    # shallow fetch по SHA (сервер разрешает -- allowAnySHA1InWant).
+    _git(origin, "config", "uploadpack.allowAnySHA1InWant", "true")
+    sha = _sha_of(origin)
+    dest = tmp_path / "clone"
+    assert repo.clone(f"file://{origin}", sha, None, dest) == sha
+    assert (dest / "skills" / "demo" / "SKILL.md").is_file()
+    assert not (dest / ".git").exists()
+
+
+def test_clone_by_commit_sha_fallback(origin, tmp_path, allow_file):
+    # Сервер не разрешает fetch по SHA: срабатывает резерв -- полный clone
+    # и checkout коммита.
+    sha = _sha_of(origin)
+    dest = tmp_path / "clone"
+    assert repo.clone(f"file://{origin}", sha, None, dest) == sha
+    assert (dest / "skills" / "demo" / "SKILL.md").is_file()
+
+
 def test_symlink_becomes_plain_file(origin, tmp_path, allow_file):
     dest = tmp_path / "clone"
     repo.clone(f"file://{origin}", "main", None, dest)

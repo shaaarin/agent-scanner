@@ -131,7 +131,7 @@ docker push localhost:5001/agent-scanner-proxy:latest
 
 ```
 # 1. kubectl и kind (пропустите, если уже есть; кладите в ~/bin)
-curl -sLo ~/bin/kubectl "https://dl.k8s.io/release/$(curl -sL https://dl.k8s.io/release/stable.txt)/bin/linux/amd64" && chmod +x ~/bin/kubectl
+curl -sLo ~/bin/kubectl "https://dl.k8s.io/release/$(curl -sL https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl" && chmod +x ~/bin/kubectl
 curl -sLo ~/bin/kind "https://kind.sigs.k8s.io/dl/v0.24.0/kind-linux-amd64" && chmod +x ~/bin/kind
 
 # 2. Локальный реестр, привязанный к (ещё не созданной) сети kind
