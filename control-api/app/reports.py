@@ -39,7 +39,7 @@ REPORT_VERSION = 1
 SEVERITIES = ("critical", "high", "medium", "low", "info")
 
 DYNAMIC_TYPES = {"deep_team", "pyrit_scan", "indirect_injection", "system_prompt_leak"}
-STATIC_TYPES = {"code_scan", "ai_code_scan"}
+STATIC_TYPES = {"code_scan", "ai_code_scan", "agent_skills"}
 
 RATING_LABELS = {
     "protected": "Защищён",
@@ -349,6 +349,59 @@ def _from_code_findings(results: dict) -> tuple[dict, list[dict]]:
     return _metrics("static", findings=findings), findings
 
 
+def _from_skill_findings(results: dict) -> tuple[dict, list[dict]]:
+    """Agent Skills: результаты движков вложены в `skills[].findings[]`."""
+    findings = []
+    for skill in results.get("skills") or []:
+        if not isinstance(skill, dict):
+            continue
+        skill_name = str(skill.get("name") or skill.get("path") or "навык")
+        for raw in skill.get("findings") or []:
+            if not isinstance(raw, dict):
+                continue
+            file = raw.get("file")
+            line = raw.get("line")
+            snippet = raw.get("snippet")
+            engine = raw.get("engine")
+            details = []
+            if skill.get("path"):
+                details.append(f"Навык: {skill_name} ({skill['path']})")
+            if engine:
+                details.append(f"Движок: {engine}")
+            if snippet:
+                details.append(str(snippet))
+            findings.append(
+                _finding(
+                    len(findings) + 1,
+                    title=str(raw.get("title") or raw.get("finding") or "Находка анализа навыка")[:200],
+                    severity=_severity(raw.get("severity")),
+                    category=str(raw.get("category") or "agent_skill"),
+                    rule_id=raw.get("rule_id"),
+                    description=str(raw.get("finding") or raw.get("title") or ""),
+                    recommendation=str(raw.get("fix") or ""),
+                    location={"file": file, "start_line": line, "end_line": line} if file else None,
+                    evidence={
+                        "detail": "\n".join(details),
+                        "engine": engine,
+                        "skill": skill_name,
+                        "confidence": raw.get("confidence"),
+                    }
+                    if details or raw.get("confidence") is not None
+                    else None,
+                )
+            )
+    metrics = _metrics("static", findings=findings)
+    # Сканер хранит максимум 2000 подробных находок, но summary считает все.
+    # При усечении сохраняем полные счётчики в карточке единого отчёта.
+    summary = results.get("summary")
+    if results.get("findings_truncated") and isinstance(summary, dict):
+        metrics["findings_total"] = int(summary.get("total") or 0)
+        metrics["by_severity"] = {
+            severity: int(summary.get(severity) or 0) for severity in SEVERITIES
+        }
+    return metrics, findings
+
+
 def _from_injection_trials(results: dict, scan_type: str) -> tuple[dict, list[dict]]:
     """Косвенные инъекции и утечка системного промпта: прогоны с вердиктом."""
     trials = [trial for trial in (results.get("trials") or []) if isinstance(trial, dict)]
@@ -458,6 +511,7 @@ _NORMALIZERS = {
     "pyrit_scan": lambda results, scan_type: _from_vulnerability_rows(results, scan_type),
     "code_scan": lambda results, scan_type: _from_code_findings(results),
     "ai_code_scan": lambda results, scan_type: _from_code_findings(results),
+    "agent_skills": lambda results, scan_type: _from_skill_findings(results),
     "indirect_injection": lambda results, scan_type: _from_injection_trials(results, scan_type),
     "system_prompt_leak": lambda results, scan_type: _from_injection_trials(results, scan_type),
     "mcp": lambda results, scan_type: _from_mcp(results),
