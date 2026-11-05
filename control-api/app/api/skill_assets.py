@@ -15,8 +15,9 @@ from urllib.parse import quote, unquote
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile
 from sqlmodel import Session, select
 
+from app.auth.deps import accessible_org_ids, ensure_org_access, get_caller, Caller, require_machine
 from app.db import get_session
-from app.models import Scan, SkillAsset, SkillSource
+from app.models import OrgRole, Scan, SkillAsset, SkillSource
 from app.schemas import SkillAssetCreate, SkillAssetRead, SkillAssetUpdate
 
 router = APIRouter(prefix="/skill-assets", tags=["skill-assets"])
@@ -68,10 +69,16 @@ def _require_unique_name(name: str, session: Session, exclude_id: int | None = N
 
 
 @router.post("", response_model=SkillAssetRead)
-def create_skill_asset(payload: SkillAssetCreate, session: Session = Depends(get_session)):
+def create_skill_asset(
+    payload: SkillAssetCreate,
+    caller: Caller = Depends(get_caller),
+    session: Session = Depends(get_session),
+):
+    ensure_org_access(caller, session, payload.organization_id, min_role=OrgRole.EDITOR)
     _require_unique_name(payload.name.strip(), session)
     asset = SkillAsset(
         name=payload.name.strip(),
+        organization_id=payload.organization_id,
         description=payload.description,
         source=SkillSource.REPOSITORY,
         git_repo_url=(payload.git_repo_url or "").strip() or None,
@@ -86,16 +93,20 @@ def create_skill_asset(payload: SkillAssetCreate, session: Session = Depends(get
 
 @router.post("/upload", response_model=SkillAssetRead)
 def upload_skill_asset(
+    organization_id: int = Form(gt=0),
     name: str = Form(min_length=1),
     description: str = Form(default=""),
     file: UploadFile = File(),
+    caller: Caller = Depends(get_caller),
     session: Session = Depends(get_session),
 ):
+    ensure_org_access(caller, session, organization_id, min_role=OrgRole.EDITOR)
     _require_unique_name(name.strip(), session)
     content = file.file.read()
     _validate_archive(content)
     asset = SkillAsset(
         name=name.strip(),
+        organization_id=organization_id,
         description=description.strip() or None,
         source=SkillSource.ZIP,
         archive_filename=_safe_filename(file.filename),
@@ -109,19 +120,31 @@ def upload_skill_asset(
 
 
 @router.get("", response_model=list[SkillAssetRead])
-def list_skill_assets(session: Session = Depends(get_session)):
-    return session.exec(select(SkillAsset).order_by(SkillAsset.created_at.desc())).all()
+def list_skill_assets(
+    caller: Caller = Depends(get_caller),
+    session: Session = Depends(get_session),
+):
+    query = select(SkillAsset).order_by(SkillAsset.created_at.desc())
+    org_ids = accessible_org_ids(session, caller)
+    if org_ids is not None:
+        query = query.where(SkillAsset.organization_id.in_(org_ids))
+    return session.exec(query).all()
 
 
 @router.get("/{asset_id}", response_model=SkillAssetRead)
-def get_skill_asset(asset_id: int, session: Session = Depends(get_session)):
+def get_skill_asset(
+    asset_id: int,
+    caller: Caller = Depends(get_caller),
+    session: Session = Depends(get_session),
+):
     asset = session.get(SkillAsset, asset_id)
     if not asset:
         raise HTTPException(status_code=404, detail="Skill-актив не найден")
+    ensure_org_access(caller, session, asset.organization_id)
     return asset
 
 
-@router.get("/{asset_id}/content")
+@router.get("/{asset_id}/content", dependencies=[Depends(require_machine)])
 def get_skill_asset_content(asset_id: int, session: Session = Depends(get_session)) -> Response:
     """Байты zip-архива для scanner-skills (по образцу /mcp-artifacts/{id}/content).
     У git-актива архива нет -- 409: такой актив сканер клонирует сам."""
@@ -144,10 +167,16 @@ def get_skill_asset_content(asset_id: int, session: Session = Depends(get_sessio
 
 
 @router.put("/{asset_id}", response_model=SkillAssetRead)
-def update_skill_asset(asset_id: int, payload: SkillAssetUpdate, session: Session = Depends(get_session)):
+def update_skill_asset(
+    asset_id: int,
+    payload: SkillAssetUpdate,
+    caller: Caller = Depends(get_caller),
+    session: Session = Depends(get_session),
+):
     asset = session.get(SkillAsset, asset_id)
     if not asset:
         raise HTTPException(status_code=404, detail="Skill-актив не найден")
+    ensure_org_access(caller, session, asset.organization_id, min_role=OrgRole.EDITOR)
     updates = payload.model_dump(exclude_unset=True)
     new_name = (updates.get("name") or "").strip()
     if new_name and new_name != asset.name:
@@ -164,10 +193,15 @@ def update_skill_asset(asset_id: int, payload: SkillAssetUpdate, session: Sessio
 
 
 @router.delete("/{asset_id}", status_code=204)
-def delete_skill_asset(asset_id: int, session: Session = Depends(get_session)):
+def delete_skill_asset(
+    asset_id: int,
+    caller: Caller = Depends(get_caller),
+    session: Session = Depends(get_session),
+):
     asset = session.get(SkillAsset, asset_id)
     if not asset:
         raise HTTPException(status_code=404, detail="Skill-актив не найден")
+    ensure_org_access(caller, session, asset.organization_id, min_role=OrgRole.ADMIN)
     scans = session.exec(
         select(Scan).where(Scan.asset_kind == "skill").where(Scan.asset_id == asset_id)
     ).all()

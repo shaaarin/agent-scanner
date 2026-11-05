@@ -6,6 +6,7 @@ import { PageHeader } from "../components/PageHeader";
 import { ScansTable } from "../components/ScansTable";
 import { ScanCreateModal } from "../components/ScanCreateModal";
 import { AssetSummary } from "../components/AssetSummary";
+import { useAuth } from "../auth/AuthContext";
 
 // Карточка актива: сводка-дашборд (оценка устойчивости и находки),
 // реквизиты, кнопка «Новое сканирование» и список сканов этого актива.
@@ -113,6 +114,7 @@ export function AssetDetail() {
   const { kind, id } = useParams<{ kind: AssetKind; id: string }>();
   const assetKind = (kind ?? "agent") as AssetKind;
   const assetId = Number(id);
+  const {canEdit} = useAuth();
 
   const [agent, setAgent] = useState<AgentConfig | null>(null);
   const [mcp, setMcp] = useState<McpAsset | null>(null);
@@ -164,9 +166,11 @@ export function AssetDetail() {
         title={assetName}
         description={`${KIND_LABELS[assetKind] ?? assetKind} · раздел «Активы»`}
         actions={
-          <button className="btn btn-primary" onClick={() => setShowCreate(true)}>
-            + Новое сканирование
-          </button>
+          canEdit ? (
+            <button className="btn btn-primary" onClick={() => setShowCreate(true)}>
+              + Новое сканирование
+            </button>
+          ) : undefined
         }
       />
 

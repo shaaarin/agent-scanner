@@ -10,9 +10,10 @@ import time
 from typing import Optional
 
 import httpx
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session, select
 
+from app.auth.deps import accessible_org_ids, ensure_org_access, get_caller, Caller
 from app.db import engine
 from app.models import AgentConfig, AssetKind, LLMModel, McpAsset, SkillAsset
 from app.scanner_registry import REGISTRY, ScannerRegistration
@@ -45,17 +46,20 @@ def _fetch_schema(reg: ScannerRegistration) -> Optional[dict]:
     return schema
 
 
-def _enrich_llm_model_fields(schema: Optional[dict]) -> Optional[dict]:
+def _enrich_llm_model_fields(schema: Optional[dict], session: Session, org_ids: Optional[list[int]]) -> Optional[dict]:
     """Поле типа `llm_model` сканер описать сам не может -- модели живут в БД
-    control-api. Заполняем options списком `LLMModel` на момент запроса."""
+    control-api. Заполняем options списком `LLMModel` на момент запроса --
+    только модели организаций, доступных вызывающему."""
     if not schema:
         return schema
     fields = schema.get("fields", [])
     if not any(field.get("type") == "llm_model" for field in fields):
         return schema
-    with Session(engine) as session:
-        models = session.exec(select(LLMModel)).all()
-        options = [{"value": model.id, "label": model.name} for model in models]
+    query = select(LLMModel)
+    if org_ids is not None:
+        query = query.where(LLMModel.organization_id.in_(org_ids))
+    models = session.exec(query).all()
+    options = [{"value": model.id, "label": model.name} for model in models]
     enriched = {**schema, "fields": [dict(field) for field in fields]}
     for field in enriched["fields"]:
         if field.get("type") == "llm_model":
@@ -113,55 +117,58 @@ def _filter_mcp_schema_by_target(schema: dict, target_kind: str, reason: str) ->
 def list_scanners(
     asset_kind: Optional[AssetKind] = None,
     asset_id: Optional[int] = None,
+    caller: Caller = Depends(get_caller),
 ) -> list[dict]:
     """Реестр сканеров. С `asset_kind`+`asset_id` -- ещё и применимость к
     конкретному активу: `available_for_asset` и причина, а в схеме MCP
     движки помечаются по режиму цели (remote/repository/bundle)."""
-    capabilities: Optional[set[str]] = None
-    mcp_target_kind: Optional[str] = None
-    if asset_kind is not None and asset_id is not None:
-        model = {AssetKind.AGENT: AgentConfig, AssetKind.MCP: McpAsset, AssetKind.SKILL: SkillAsset}.get(asset_kind)
-        with Session(engine) as session:
+    with Session(engine) as session:
+        org_ids = accessible_org_ids(session, caller)
+        capabilities: Optional[set[str]] = None
+        mcp_target_kind: Optional[str] = None
+        if asset_kind is not None and asset_id is not None:
+            model = {AssetKind.AGENT: AgentConfig, AssetKind.MCP: McpAsset, AssetKind.SKILL: SkillAsset}.get(asset_kind)
             asset = session.get(model, asset_id) if model else None
             if not asset:
                 raise HTTPException(status_code=404, detail="Актив не найден")
+            ensure_org_access(caller, session, asset.organization_id)
             capabilities = _asset_capabilities(session, asset_kind, asset)
             if asset_kind == AssetKind.MCP:
                 mcp_target_kind = (asset.config or {}).get("kind")
 
-    target_names = {"remote": "удалённый сервер", "repository": "репозиторий", "bundle": "MCPB-архив"}
-    result = []
-    for reg in REGISTRY:
-        schema = _enrich_llm_model_fields(_fetch_schema(reg))
-        entry = {
-            "type": reg.type.value,
-            "name": reg.name,
-            "description": reg.description,
-            "service": reg.service,
-            "asset_kinds": list(reg.asset_kinds),
-            "phases": list(reg.phases),
-            "available": schema is not None,
-            "config_schema": schema,
-            "available_for_asset": None,
-            "unavailable_reason": None,
-        }
-        if capabilities is not None:
-            kind_ok = asset_kind in reg.asset_kinds
-            requirements_ok = reg.available_for(capabilities)
-            entry["available_for_asset"] = kind_ok and requirements_ok
-            if not entry["available_for_asset"]:
-                if not kind_ok:
-                    kinds = ", ".join(reg.asset_kinds)
-                    entry["unavailable_reason"] = f"сканер работает только с активами: {kinds}"
-                else:
-                    missing = {
-                        "code": "у актива нет исходников",
-                        "live": "у актива нет работающего сервиса (и платформа не может его поднять)",
-                        "deployable": "платформа не может поднять этот актив сама (он не из репозитория)",
-                    }
-                    need = ", ".join(sorted(reg.requirements))
-                    entry["unavailable_reason"] = f"требуется {need}: {missing.get(next(iter(reg.requirements)), need)}"
-        if schema and mcp_target_kind and reg.type.value == "mcp":
-            entry["config_schema"] = _filter_mcp_schema_by_target(schema, mcp_target_kind, target_names.get(mcp_target_kind, mcp_target_kind))
-        result.append(entry)
+        target_names = {"remote": "удалённый сервер", "repository": "репозиторий", "bundle": "MCPB-архив"}
+        result = []
+        for reg in REGISTRY:
+            schema = _enrich_llm_model_fields(_fetch_schema(reg), session, org_ids)
+            entry = {
+                "type": reg.type.value,
+                "name": reg.name,
+                "description": reg.description,
+                "service": reg.service,
+                "asset_kinds": list(reg.asset_kinds),
+                "phases": list(reg.phases),
+                "available": schema is not None,
+                "config_schema": schema,
+                "available_for_asset": None,
+                "unavailable_reason": None,
+            }
+            if capabilities is not None:
+                kind_ok = asset_kind in reg.asset_kinds
+                requirements_ok = reg.available_for(capabilities)
+                entry["available_for_asset"] = kind_ok and requirements_ok
+                if not entry["available_for_asset"]:
+                    if not kind_ok:
+                        kinds = ", ".join(reg.asset_kinds)
+                        entry["unavailable_reason"] = f"сканер работает только с активами: {kinds}"
+                    else:
+                        missing = {
+                            "code": "у актива нет исходников",
+                            "live": "у актива нет работающего сервиса (и платформа не может его поднять)",
+                            "deployable": "платформа не может поднять этот актив сама (он не из репозитория)",
+                        }
+                        need = ", ".join(sorted(reg.requirements))
+                        entry["unavailable_reason"] = f"требуется {need}: {missing.get(next(iter(reg.requirements)), need)}"
+            if schema and mcp_target_kind and reg.type.value == "mcp":
+                entry["config_schema"] = _filter_mcp_schema_by_target(schema, mcp_target_kind, target_names.get(mcp_target_kind, mcp_target_kind))
+            result.append(entry)
     return result

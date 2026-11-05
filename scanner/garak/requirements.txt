@@ -1,0 +1,5 @@
+fastapi
+uvicorn[standard]
+httpx
+pyyaml
+garak==0.17.0

@@ -12,7 +12,9 @@ from pathlib import Path
 from typing import Optional
 
 import yaml
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
+
+from app.auth.deps import get_caller, Caller
 
 router = APIRouter(prefix="/library", tags=["library"])
 
@@ -108,7 +110,7 @@ def _resolve(slug: str) -> Path:
 
 
 @router.get("/articles")
-def list_articles() -> list[dict]:
+def list_articles(caller: Caller = Depends(get_caller)) -> list[dict]:
     """Metadata for every article, newest first."""
     articles = [_read(path) for path in _article_paths()]
     for article in articles:
@@ -118,5 +120,5 @@ def list_articles() -> list[dict]:
 
 
 @router.get("/articles/{slug:path}")
-def get_article(slug: str) -> dict:
+def get_article(slug: str, caller: Caller = Depends(get_caller)) -> dict:
     return _read(_resolve(slug))

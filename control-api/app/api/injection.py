@@ -15,14 +15,15 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlmodel import Session, select
 
+from app.auth.deps import ensure_org_access, get_caller, Caller, require_machine
 from app.db import get_session
-from app.models import InjectionTrial, InjectionTrialStatus, Scan
+from app.models import InjectionTrial, InjectionTrialStatus, Scan, OrgRole
 from app.schemas import InjectionTrialCreate, InjectionTrialUpdate
 
 router = APIRouter(tags=["injection"])
 
 
-@router.get("/scans/{scan_id}/injection/active")
+@router.get("/scans/{scan_id}/injection/active", dependencies=[Depends(require_machine)])
 def get_active_injection(scan_id: int, session: Session = Depends(get_session)) -> Optional[dict]:
     """Директива для прокси: что подложить в текущем прогоне. `null` -- в
     скане нет активного прогона (прокси тогда ничего не меняет)."""
@@ -57,7 +58,7 @@ def get_active_injection(scan_id: int, session: Session = Depends(get_session)) 
     }
 
 
-@router.post("/scans/{scan_id}/trials", response_model=InjectionTrial)
+@router.post("/scans/{scan_id}/trials", response_model=InjectionTrial, dependencies=[Depends(require_machine)])
 def create_trial(scan_id: int, payload: InjectionTrialCreate, session: Session = Depends(get_session)) -> InjectionTrial:
     if not session.get(Scan, scan_id):
         raise HTTPException(status_code=404, detail="Scan not found")
@@ -72,8 +73,13 @@ def create_trial(scan_id: int, payload: InjectionTrialCreate, session: Session =
 def list_trials(
     scan_id: int,
     status: Optional[InjectionTrialStatus] = Query(None),
+    caller: Caller = Depends(get_caller),
     session: Session = Depends(get_session),
 ) -> list[InjectionTrial]:
+    scan = session.get(Scan, scan_id)
+    if not scan:
+        raise HTTPException(status_code=404, detail="Scan not found")
+    ensure_org_access(caller, session, scan.organization_id)
     statement = select(InjectionTrial).where(InjectionTrial.scan_id == scan_id)
     if status is not None:
         statement = statement.where(InjectionTrial.status == status)
@@ -81,7 +87,7 @@ def list_trials(
     return session.exec(statement).all()
 
 
-@router.patch("/trials/{trial_id}", response_model=InjectionTrial)
+@router.patch("/trials/{trial_id}", response_model=InjectionTrial, dependencies=[Depends(require_machine)])
 def update_trial(trial_id: int, payload: InjectionTrialUpdate, session: Session = Depends(get_session)) -> InjectionTrial:
     trial = session.get(InjectionTrial, trial_id)
     if not trial:

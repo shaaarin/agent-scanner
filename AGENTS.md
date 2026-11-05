@@ -33,7 +33,7 @@
 | `scanner-skills` (`scanner/skills`) | Скан `agent_skills`: распаковывает zip или клонирует репозиторий skill-актива и проверяет навыки (`SKILL.md`) движками Cisco skill-scanner и NVIDIA SkillSpector (подпроцессы из `/opt/engines/*`) со своими YARA-правилами и проверкой frontmatter; вердикт `pass`/`review`/`block` считает сам. Без kind/launcher и LLM. |
 | `launcher` | Собирает образ агента в кластере (git-clone + Kaniko) и запускает Pod с MITM-сайдкаром, по kubeconfig, без Docker-сокета. |
 | `web` | React/Vite дашборд. **Весь текст интерфейса — на русском**, новый текст тоже. |
-| `control-api-mitm-bridge` / `launcher-mitm-bridge` | `alpine/socat`-форвардеры, владеющие опубликованным портом вместо dual-homed сервисов (quirk WSL2, см. ниже). |
+| `control-api-mitm-bridge` | `alpine/socat`-форвардер, владеющий опубликованным портом вместо dual-homed `control-api` (quirk WSL2, см. ниже). |
 
 Каталоги `generator/` и `interactor/` — **легаси** прежней архитектуры
 (кампании, шаблоны, fuzz/tree). В `docker-compose.yml` их нет, эндпоинтов под
@@ -70,6 +70,19 @@
   `/skill-assets`, `/scanners`, `/scans`, `/scans/{id}/logs`,
   `/llm-models`, `/agent-configs`, `/events`, `/events/{id}`,
   `/library/articles`.
+- **Авторизация и организации.** Владелец активов/моделей/сканов --
+  организация; доступ = участие с ролью `admin`/`editor`/`reader`
+  (`Membership`), над ними системный админ (`is_superadmin`, bootstrap из
+  `ADMIN_LOGIN`/`ADMIN_PASSWORD`). Вход по логину+паролю (scrypt,
+  `app/auth/passwords.py`), сессия -- подписанная HttpOnly cookie
+  (SessionMiddleware, `SESSION_SECRET_KEY`). Зависимости в
+  `app/auth/deps.py`: списки фильтруются по организациям, записи -- по
+  роли в организации записи; сервисы платформы ходят с заголовком
+  `X-Internal-Token` (`INTERNAL_API_TOKEN`, одно значение у control-api,
+  сканеров, launcher и mitm-сайдкара). Пустой `SESSION_SECRET_KEY` --
+  auth выключен, всё открыто (dev). Новые формы создания на фронте обязаны
+  отправлять `organization_id` (активная организация из шапки). Подробнее --
+  `docs/architecture.md` §1.1.
 - **Реестр сканеров.** Единственное место со связкой «тип → сервис» —
   `control-api/app/scanner_registry.py` (`ScannerRegistration`: вид актива,
   фазы, `requirements` -- свойства актива ("code"/"live"/"deployable"),
@@ -242,8 +255,11 @@ LLM нет (LLM в модуле не используется). Как запу�
 - Сервис, подключённый одновременно к default-сети Compose и сети `kind`,
   получает **нестабильный опубликованный порт** (reset/`ERR_EMPTY_RESPONSE`,
   при этом внутри сети всё работает). Поэтому `control-api` не подключён к
-  `kind` (его порт постоянно дёргает браузер), а `launcher` — подключён, но
-  его опубликованным портом владеет `launcher-mitm-bridge` (`alpine/socat`).
+  `kind` (его порт постоянно дёргает браузер), а его опубликованным портом
+  владеет `control-api-mitm-bridge` (`alpine/socat`). `launcher` подключён к
+  `kind` и порта не публикует вовсе: браузер его не вызывает — разбор
+  репозитория в мастере агента control-api проксирует сам
+  (`control-api/app/api/repo.py`).
   Если порт всё же «поплыл» — обращайтесь к сервису изнутри:
   `docker compose exec <service> python3 -c "import httpx; print(httpx.get('http://localhost:8000/health').text)"`.
 - Контекст сборки Kaniko — всегда корень репозитория;

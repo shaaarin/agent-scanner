@@ -18,6 +18,7 @@ from fastapi.responses import Response
 from sqlmodel import Session, select
 
 from app import reports, sarif
+from app.auth.deps import ensure_org_access, get_caller, Caller
 from app.db import get_session
 from app.models import (
     AgentConfig,
@@ -36,10 +37,11 @@ router = APIRouter(tags=["reports"])
 _DIALOGUE_TYPES = {"indirect_injection", "system_prompt_leak"}
 
 
-def _get_scan(scan_id: int, session: Session) -> Scan:
+def _get_scan(scan_id: int, session: Session, caller: Caller) -> Scan:
     scan = session.get(Scan, scan_id)
     if not scan:
         raise HTTPException(status_code=404, detail="Сканирование не найдено")
+    ensure_org_access(caller, session, scan.organization_id)
     return scan
 
 
@@ -52,14 +54,22 @@ def _json_download(payload: dict, filename: str) -> Response:
 
 
 @router.get("/scans/{scan_id}/report")
-def get_scan_report(scan_id: int, session: Session = Depends(get_session)) -> dict:
+def get_scan_report(
+    scan_id: int,
+    caller: Caller = Depends(get_caller),
+    session: Session = Depends(get_session),
+) -> dict:
     """Единый отчёт скана -- его читает страница скана и сводка актива."""
-    return reports.build(_get_scan(scan_id, session))
+    return reports.build(_get_scan(scan_id, session, caller))
 
 
 @router.get("/scans/{scan_id}/export/sarif")
-def export_sarif(scan_id: int, session: Session = Depends(get_session)) -> Response:
-    scan = _get_scan(scan_id, session)
+def export_sarif(
+    scan_id: int,
+    caller: Caller = Depends(get_caller),
+    session: Session = Depends(get_session),
+) -> Response:
+    scan = _get_scan(scan_id, session, caller)
     report = reports.build(scan)
     if report["scan"]["analysis"] == "dynamic":
         raise HTTPException(
@@ -128,11 +138,15 @@ def _trial_conversation(trial: InjectionTrial, traffic: list[TrafficEvent]) -> l
 
 
 @router.get("/scans/{scan_id}/export/attacks")
-def export_attacks(scan_id: int, session: Session = Depends(get_session)) -> Response:
+def export_attacks(
+    scan_id: int,
+    caller: Caller = Depends(get_caller),
+    session: Session = Depends(get_session),
+) -> Response:
     """Успешные атаки с диалогами. Для инъекций берём прогоны и перехваченный
     трафик из базы (там полный payload и реальная подмена), для DeepTeam и
     PyRIT -- промпт и ответ, сохранённые сканером в результатах."""
-    scan = _get_scan(scan_id, session)
+    scan = _get_scan(scan_id, session, caller)
     report = reports.build(scan)
     if report["scan"]["analysis"] != "dynamic":
         raise HTTPException(
@@ -191,15 +205,11 @@ def export_attacks(scan_id: int, session: Session = Depends(get_session)) -> Res
     return _json_download(payload, f"scan-{scan_id}-attacks.json")
 
 
-def _asset_exists(kind: str, asset_id: int, session: Session) -> bool:
-    model = {"agent": AgentConfig, "mcp": McpAsset, "skill": SkillAsset}.get(kind)
-    return bool(model and session.get(model, asset_id))
-
-
 @router.get("/assets/{kind}/{asset_id}/summary")
 def asset_summary(
     kind: AssetKind,
     asset_id: int,
+    caller: Caller = Depends(get_caller),
     session: Session = Depends(get_session),
 ) -> dict:
     """Сводка-дашборд карточки актива.
@@ -209,8 +219,11 @@ def asset_summary(
     Итоговая оценка -- худшая среди типов.
     """
     kind_value = str(getattr(kind, "value", kind))
-    if not _asset_exists(kind_value, asset_id, session):
+    model = {"agent": AgentConfig, "mcp": McpAsset, "skill": SkillAsset}.get(kind_value)
+    asset = session.get(model, asset_id) if model else None
+    if not asset:
         raise HTTPException(status_code=404, detail="Актив не найден")
+    ensure_org_access(caller, session, asset.organization_id)
 
     scans = session.exec(
         select(Scan)

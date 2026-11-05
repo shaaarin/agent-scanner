@@ -3,14 +3,15 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlmodel import Session, select
 
+from app.auth.deps import accessible_org_ids, ensure_org_access, get_caller, Caller, require_machine
 from app.db import get_session
-from app.models import EventDirection, TrafficEvent
+from app.models import EventDirection, Scan, TrafficEvent
 from app.schemas import TrafficEventDetail, TrafficEventDetailResponse
 
 router = APIRouter(prefix="/events", tags=["events"])
 
 
-@router.post("", response_model=TrafficEvent)
+@router.post("", response_model=TrafficEvent, dependencies=[Depends(require_machine)])
 def create_event(payload: TrafficEvent, session: Session = Depends(get_session)):
     # raw_excerpt is stored in full, untruncated -- the events page shows the
     # exact body the agent sent/received, and the proxy is the only writer.
@@ -31,6 +32,7 @@ def list_events(
     include_body: bool = False,
     limit: int = Query(default=100, le=1000),
     offset: int = 0,
+    caller: Caller = Depends(get_caller),
     session: Session = Depends(get_session),
 ):
     # Список по умолчанию без тел (`raw_excerpt`), чтобы длинная таблица
@@ -48,6 +50,11 @@ def list_events(
         query = query.where(TrafficEvent.flow_id == flow_id)
     if direction is not None:
         query = query.where(TrafficEvent.direction == direction)
+    org_ids = accessible_org_ids(session, caller)
+    if org_ids is not None:
+        # Чужой трафик не виден: только события сканов своих организаций
+        # (события без скана -- вне сканирований, их видит unrestricted).
+        query = query.where(TrafficEvent.scan_id.in_(select(Scan.id).where(Scan.organization_id.in_(org_ids))))
     query = query.order_by(TrafficEvent.created_at.desc()).offset(offset).limit(limit)
     rows = session.exec(query).all()
     if include_body:
@@ -58,11 +65,22 @@ def list_events(
 
 
 @router.get("/{event_id}", response_model=TrafficEventDetailResponse)
-def get_event(event_id: int, session: Session = Depends(get_session)):
+def get_event(
+    event_id: int,
+    caller: Caller = Depends(get_caller),
+    session: Session = Depends(get_session),
+):
     """One event with its full body, plus the opposite-direction event of the
     same flow (request <-> response) so the UI can show the whole exchange."""
     event = session.get(TrafficEvent, event_id)
     if not event:
+        raise HTTPException(status_code=404, detail="Событие не найдено")
+    if event.scan_id is not None:
+        scan = session.get(Scan, event.scan_id)
+        if not scan:
+            raise HTTPException(status_code=404, detail="Событие не найдено")
+        ensure_org_access(caller, session, scan.organization_id)
+    elif not caller.unrestricted:
         raise HTTPException(status_code=404, detail="Событие не найдено")
 
     other_direction = (

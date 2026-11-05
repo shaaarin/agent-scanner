@@ -8,11 +8,12 @@ from pathlib import Path, PurePosixPath
 from urllib.parse import quote, unquote, urljoin, urlparse
 
 import httpx
-from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile
 from sqlmodel import Session, select
 
+from app.auth.deps import accessible_org_ids, ensure_org_access, get_caller, Caller, require_machine
 from app.db import get_session
-from app.models import MCPArtifact
+from app.models import MCPArtifact, OrgRole
 from app.schemas import MCPArtifactFromURL, MCPArtifactRead
 
 router = APIRouter(prefix="/mcp-artifacts", tags=["mcp-artifacts"])
@@ -135,6 +136,7 @@ def _download(url: str) -> tuple[bytes, str, str]:
 def _save_artifact(
     session: Session,
     *,
+    organization_id: int,
     content: bytes,
     filename: str,
     source_type: str,
@@ -146,6 +148,7 @@ def _save_artifact(
     if expected_sha256 and digest != expected_sha256:
         raise HTTPException(status_code=422, detail=f"SHA-256 не совпадает: получен {digest}")
     artifact = MCPArtifact(
+        organization_id=organization_id,
         original_filename=_safe_filename(filename),
         source_type=source_type,
         source_url=source_url,
@@ -162,9 +165,12 @@ def _save_artifact(
 
 @router.post("/upload", response_model=MCPArtifactRead)
 async def upload_artifact(
+    organization_id: int = Form(gt=0),
     file: UploadFile = File(...),
+    caller: Caller = Depends(get_caller),
     session: Session = Depends(get_session),
 ) -> MCPArtifact:
+    ensure_org_access(caller, session, organization_id, min_role=OrgRole.EDITOR)
     chunks: list[bytes] = []
     size = 0
     while chunk := await file.read(1024 * 1024):
@@ -172,14 +178,26 @@ async def upload_artifact(
         if size > MAX_ARCHIVE_BYTES:
             raise HTTPException(status_code=413, detail="MCPB-архив превышает ограничение 50 МиБ")
         chunks.append(chunk)
-    return _save_artifact(session, content=b"".join(chunks), filename=file.filename or "bundle.mcpb", source_type="upload")
+    return _save_artifact(
+        session,
+        organization_id=organization_id,
+        content=b"".join(chunks),
+        filename=file.filename or "bundle.mcpb",
+        source_type="upload",
+    )
 
 
 @router.post("/from-url", response_model=MCPArtifactRead)
-def download_artifact(payload: MCPArtifactFromURL, session: Session = Depends(get_session)) -> MCPArtifact:
+def download_artifact(
+    payload: MCPArtifactFromURL,
+    caller: Caller = Depends(get_caller),
+    session: Session = Depends(get_session),
+) -> MCPArtifact:
+    ensure_org_access(caller, session, payload.organization_id, min_role=OrgRole.EDITOR)
     content, filename, final_url = _download(str(payload.url))
     return _save_artifact(
         session,
+        organization_id=payload.organization_id,
         content=content,
         filename=filename,
         source_type="url",
@@ -189,20 +207,33 @@ def download_artifact(payload: MCPArtifactFromURL, session: Session = Depends(ge
 
 
 @router.get("", response_model=list[MCPArtifactRead])
-def list_artifacts(session: Session = Depends(get_session)) -> list[MCPArtifact]:
-    return list(session.exec(select(MCPArtifact).order_by(MCPArtifact.created_at.desc())).all())
+def list_artifacts(
+    caller: Caller = Depends(get_caller),
+    session: Session = Depends(get_session),
+) -> list[MCPArtifact]:
+    query = select(MCPArtifact).order_by(MCPArtifact.created_at.desc())
+    org_ids = accessible_org_ids(session, caller)
+    if org_ids is not None:
+        query = query.where(MCPArtifact.organization_id.in_(org_ids))
+    return list(session.exec(query).all())
 
 
 @router.get("/{artifact_id}", response_model=MCPArtifactRead)
-def get_artifact(artifact_id: int, session: Session = Depends(get_session)) -> MCPArtifact:
+def get_artifact(
+    artifact_id: int,
+    caller: Caller = Depends(get_caller),
+    session: Session = Depends(get_session),
+) -> MCPArtifact:
     artifact = session.get(MCPArtifact, artifact_id)
     if not artifact:
         raise HTTPException(status_code=404, detail="MCPB-артефакт не найден")
+    ensure_org_access(caller, session, artifact.organization_id)
     return artifact
 
 
-@router.get("/{artifact_id}/content")
+@router.get("/{artifact_id}/content", dependencies=[Depends(require_machine)])
 def get_artifact_content(artifact_id: int, session: Session = Depends(get_session)) -> Response:
+    """Сырые байты MCPB -- только для scanner-mcp (машинный контур)."""
     artifact = session.get(MCPArtifact, artifact_id)
     if not artifact:
         raise HTTPException(status_code=404, detail="MCPB-артефакт не найден")

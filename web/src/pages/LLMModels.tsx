@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api } from "../api/client";
 import type { LLMModelListItem, ProviderType } from "../api/types";
 import { PageHeader } from "../components/PageHeader";
+import { useAuth } from "../auth/AuthContext";
 
 const emptyForm = { name: "", provider_type: "openai" as ProviderType, base_url: "", api_key: "", model: "gpt-4o-mini" };
 
@@ -20,6 +21,7 @@ function shortenBaseUrl(raw: string): string {
 }
 
 export function LLMModels() {
+  const {activeOrgId, canEdit, canAdmin} = useAuth();
   const [llmModels, setLlmModels] = useState<LLMModelListItem[]>([]);
   const [form, setForm] = useState(emptyForm);
   const [showForm, setShowForm] = useState(false);
@@ -55,7 +57,11 @@ export function LLMModels() {
         const { api_key, ...rest } = form;
         await api.put(`/llm-models/${editingId}`, api_key ? form : rest);
       } else {
-        await api.post("/llm-models", form);
+        if (activeOrgId == null) {
+          setError("Сначала выберите организацию: модели хранятся внутри организаций");
+          return;
+        }
+        await api.post("/llm-models", {...form, organization_id: activeOrgId});
       }
       handleCancel();
       load();
@@ -75,9 +81,11 @@ export function LLMModels() {
         title="LLM-модели"
         description="Провайдеры и модели для оценки ответов агента и генерации атак. Подойдёт любой OpenAI-совместимый API."
         actions={
-          <button className="btn" onClick={() => (showForm ? handleCancel() : setShowForm(true))}>
-            {showForm ? "Отмена" : "Добавить модель"}
-          </button>
+          canEdit ? (
+            <button className="btn" onClick={() => (showForm ? handleCancel() : setShowForm(true))}>
+              {showForm ? "Отмена" : "Добавить модель"}
+            </button>
+          ) : undefined
         }
       />
 
@@ -148,8 +156,8 @@ export function LLMModels() {
                 </td>
                 <td>
                   <div style={{ display: "flex", gap: 8 }}>
-                    <button className="btn btn-secondary" onClick={() => handleEdit(m)}>Изменить</button>
-                    <button className="btn btn-secondary" onClick={() => handleDelete(m.id)}>Удалить</button>
+                    {canEdit && <button className="btn btn-secondary" onClick={() => handleEdit(m)}>Изменить</button>}
+                    {canAdmin && <button className="btn btn-secondary" onClick={() => handleDelete(m.id)}>Удалить</button>}
                   </div>
                 </td>
               </tr>

@@ -38,6 +38,9 @@ PROXY_IMAGE = os.environ.get("PROXY_IMAGE", "kind-registry:5000/agent-scanner-pr
 # so a dedicated forwarder (control-api-mitm-bridge, see docker-compose.yml)
 # absorbs that instead.
 MITM_CONTROL_API_URL = os.environ.get("MITM_CONTROL_API_URL", "http://control-api-mitm-bridge:8000")
+# Секрет машинного контура: сайдкар в поде ходит в control-api через мост и
+# должен предъявлять тот же X-Internal-Token, что и compose-сервисы.
+MITM_INTERNAL_API_TOKEN = os.environ.get("INTERNAL_API_TOKEN", "")
 CA_TRUST_IMAGE = os.environ.get("CA_TRUST_IMAGE", "python:3.12-slim")  # matches other images' base, has ca-certificates
 NET_SETUP_IMAGE = os.environ.get("NET_SETUP_IMAGE", "alpine:3.19")
 
@@ -80,6 +83,8 @@ def _mitm_sidecar_container(session_id: str) -> k8s.V1Container:
         k8s.V1EnvVar(name="MITM_MODE", value="transparent"),
         k8s.V1EnvVar(name="MITM_LISTEN_PORT", value=str(MITM_LISTEN_PORT)),
     ]
+    if MITM_INTERNAL_API_TOKEN:
+        env.append(k8s.V1EnvVar(name="INTERNAL_API_TOKEN", value=MITM_INTERNAL_API_TOKEN))
     return k8s.V1Container(
         name="mitm-proxy",
         image=PROXY_IMAGE,

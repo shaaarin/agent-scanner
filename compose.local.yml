@@ -33,16 +33,28 @@ services:
       SCANNER_PYRIT_URL: http://scanner-pyrit:8000
       SCANNER_MCP_URL: http://scanner-mcp:8000
       SCANNER_PROMPTFOO_URL: http://scanner-promptfoo:8000
+      # Авторизация по логину/паролю и машинный токен -- те же переменные, что
+      # и в docker-compose.yml; пустой SESSION_SECRET_KEY = auth выключен.
+      SESSION_SECRET_KEY: ${SESSION_SECRET_KEY:-}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:4173,http://localhost:5173}
+      ADMIN_LOGIN: ${ADMIN_LOGIN:-}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:-}
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 2s
       timeout: 2s
+      # Как в docker-compose.yml: /health отвечает после init_db, на холодном
+      # старте это дольше 6 секунд.
+      start_period: 60s
     restart: unless-stopped
   web:
     build:
       context: ./web
       args:
-        VITE_CONTROL_API_URL: http://localhost:8000
+        # Пусто: адрес API фронтенд выводит из адреса страницы
+        # (web/src/api/client.ts).
+        VITE_CONTROL_API_URL: ""
     ports:
       - "127.0.0.1:4173:4173"
     depends_on:
@@ -54,6 +66,7 @@ services:
     image: agent-scanner-scanner-mcp:latest
     environment:
       CONTROL_API_URL: http://control-api:8000
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:-}
     depends_on:
       control-api:
         condition: service_healthy
@@ -68,6 +81,7 @@ services:
     environment:
       WORKER_ENGINE: cisco_yara
       CONTROL_API_URL: http://control-api:8000
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:-}
     init: true
     restart: unless-stopped
     cap_drop: [ALL]
@@ -85,6 +99,7 @@ services:
     environment:
       WORKER_ENGINE: cisco_readiness
       CONTROL_API_URL: http://control-api:8000
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:-}
     init: true
     restart: unless-stopped
     cap_drop: [ALL]
@@ -102,6 +117,7 @@ services:
     environment:
       WORKER_ENGINE: cisco_prompt_defense
       CONTROL_API_URL: http://control-api:8000
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:-}
     init: true
     restart: unless-stopped
     cap_drop: [ALL]
@@ -119,6 +135,7 @@ services:
     environment:
       WORKER_ENGINE: snyk
       CONTROL_API_URL: http://control-api:8000
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:-}
       SNYK_TOKEN: ${SNYK_TOKEN:-}
     init: true
     restart: unless-stopped
@@ -137,6 +154,7 @@ services:
     environment:
       WORKER_ENGINE: mcpradar
       CONTROL_API_URL: http://control-api:8000
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:-}
     init: true
     restart: unless-stopped
     cap_drop: [ALL]
@@ -154,6 +172,7 @@ services:
     environment:
       WORKER_ENGINE: semgrep
       CONTROL_API_URL: http://control-api:8000
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:-}
     init: true
     restart: unless-stopped
     cap_drop: [ALL]
@@ -171,6 +190,7 @@ services:
     environment:
       WORKER_ENGINE: mcp_dynamic
       CONTROL_API_URL: http://control-api:8000
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:-}
     init: true
     restart: unless-stopped
     cap_drop: [ALL]

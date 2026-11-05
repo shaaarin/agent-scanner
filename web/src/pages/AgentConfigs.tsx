@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { api, launcherApi } from "../api/client";
+import { api } from "../api/client";
 import type { AgentConfig, AgentSource, InteractionMode } from "../api/types";
 import { AssetActions } from "../components/AssetActions";
+import { useAuth } from "../auth/AuthContext";
 
 type EnvRow = { key: string; value: string };
 
@@ -96,6 +97,7 @@ function repoNameFromUrl(url: string): string {
 
 export function AgentConfigs() {
   const navigate = useNavigate();
+  const {activeOrgId, canEdit} = useAuth();
   const [configs, setConfigs] = useState<AgentConfig[]>([]);
   const [showForm, setShowForm] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -291,7 +293,7 @@ export function AgentConfigs() {
     setInspecting(true);
     setError(null);
     try {
-      const result = await launcherApi.post<RepoInspectResponse>("/repo/inspect", {
+      const result = await api.post<RepoInspectResponse>("/repo/inspect", {
         git_repo_url: gitRepoUrl,
         git_ref: ref,
         git_access_token: gitAccessToken || null,
@@ -317,7 +319,7 @@ export function AgentConfigs() {
     setError(null);
     setLoadingRepo(true);
     try {
-      const result = await launcherApi.post<RepoBranchesResponse>("/repo/branches", {
+      const result = await api.post<RepoBranchesResponse>("/repo/branches", {
         git_repo_url: gitRepoUrl,
         git_access_token: gitAccessToken || null,
       });
@@ -327,6 +329,7 @@ export function AgentConfigs() {
 
       const draftFields = {
         name: name.trim() || `${repoNameFromUrl(gitRepoUrl)}-${Math.random().toString(36).slice(2, 6)}`,
+        organization_id: activeOrgId,
         source: "repository",
         git_repo_url: gitRepoUrl,
         git_ref: defaultBranch,
@@ -336,6 +339,7 @@ export function AgentConfigs() {
       if (draftId) {
         await api.put(`/agent-configs/${draftId}`, draftFields);
       } else {
+        if (activeOrgId == null) throw new Error("Сначала выберите организацию в шапке");
         const draft = await api.post<AgentConfig>("/agent-configs", draftFields);
         setDraftId(draft.id);
         setName(draft.name);
@@ -363,6 +367,7 @@ export function AgentConfigs() {
     try {
       const draftFields = {
         name: name.trim() || `${repoNameFromUrl(base)}-remote-${Math.random().toString(36).slice(2, 6)}`,
+        organization_id: activeOrgId,
         source: "remote",
         remote_base_url: base,
         remote_headers: Object.fromEntries(remoteHeaderRows.filter((h) => h.key.trim()).map((h) => [h.key.trim(), h.value])),
@@ -371,6 +376,7 @@ export function AgentConfigs() {
       if (draftId) {
         await api.put(`/agent-configs/${draftId}`, draftFields);
       } else {
+        if (activeOrgId == null) throw new Error("Сначала выберите организацию в шапке");
         const draft = await api.post<AgentConfig>("/agent-configs", draftFields);
         setDraftId(draft.id);
         setName(draft.name);
@@ -717,9 +723,11 @@ export function AgentConfigs() {
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem" }}>
         <h2 style={{ margin: 0 }}>Агенты</h2>
-        <button className="btn" onClick={() => (showForm ? handleCancel() : setShowForm(true))}>
-          {showForm ? "Отмена" : "+ Добавить агента"}
-        </button>
+        {canEdit && (
+          <button className="btn" onClick={() => (showForm ? handleCancel() : setShowForm(true))}>
+            {showForm ? "Отмена" : "+ Добавить агента"}
+          </button>
+        )}
       </div>
 
       {error && (

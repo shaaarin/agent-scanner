@@ -3,6 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import type { Scan } from "../api/types";
 import { displayedScanStatus, scanTypeLabel } from "../api/scanTypes";
+import { useAuth } from "../auth/AuthContext";
 
 // Таблица сканов с polling выполняющихся. Используется и на общей странице
 // «Сканирования», и в карточке актива: onLoad задаёт источник списка
@@ -32,6 +33,7 @@ export function ScansTable({
   refreshKey?: number;
 }) {
   const navigate = useNavigate();
+  const {canEdit, canAdmin} = useAuth();
   const [scans, setScans] = useState<Scan[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [retrying, setRetrying] = useState<number | null>(null);
@@ -124,7 +126,7 @@ export function ScansTable({
                 <td data-label="Фаза">{scan.phase ?? "—"}</td>
                 <td data-label="Создано">{new Date(scan.created_at).toLocaleString("ru-RU")}</td>
                 <td data-label="Действия"><div className="row-actions">
-                  {scan.status === "pending" && (
+                  {canEdit && scan.status === "pending" && (
                     <button
                       className="btn btn-sm btn-primary"
                       onClick={() => handleStart(scan.id)}
@@ -132,15 +134,15 @@ export function ScansTable({
                       Запустить
                     </button>
                   )}
-                  {["failed", "partially_failed"].includes(displayedScanStatus(scan)) && <button
+                  {canEdit && ["failed", "partially_failed"].includes(displayedScanStatus(scan)) && <button
                     className="btn btn-sm btn-primary" disabled={retrying !== null}
                     title="Создать и запустить отдельную попытку с теми же настройками"
                     onClick={() => handleRetry(scan.id)}>
                     {retrying === scan.id ? "Запуск…" : "Повторить"}
                   </button>}
-                  <button className="btn btn-sm btn-danger" disabled={scan.status === "running"} onClick={() => handleDelete(scan.id)}>
+                  {canAdmin && <button className="btn btn-sm btn-danger" disabled={scan.status === "running"} onClick={() => handleDelete(scan.id)}>
                     Удалить
-                  </button>
+                  </button>}
                 </div></td>
               </tr>
             ))}

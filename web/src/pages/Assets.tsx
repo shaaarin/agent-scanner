@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { api, launcherApi } from "../api/client";
+import { api } from "../api/client";
 import type {
   AssetKind,
   McpAsset,
@@ -13,6 +13,7 @@ import { PageHeader } from "../components/PageHeader";
 import { AgentConfigs } from "./AgentConfigs";
 import { AssetActions } from "../components/AssetActions";
 import { McpAssetEditor } from "../components/McpAssetEditor";
+import { useAuth } from "../auth/AuthContext";
 
 // Раздел «Активы»: агенты / MCP / skills. Актив -- сущность, внутри которой
 // создаются сканирования (см. AssetDetail). Вкладка «Агенты» переиспользует
@@ -81,6 +82,7 @@ function repoNameFromUrl(url: string): string {
 }
 
 function McpAssetsTab() {
+  const {canEdit} = useAuth();
   const [assets, setAssets] = useState<McpAsset[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
@@ -106,9 +108,11 @@ function McpAssetsTab() {
     <div>
       <div className="section-heading">
         <h2 style={{ margin: 0 }}>MCP-активы</h2>
-        <button className="btn" onClick={() => {setEditing(null); setShowForm(!showForm);}}>
-          {showForm ? "Отмена" : "+ Добавить MCP-актив"}
-        </button>
+        {canEdit && (
+          <button className="btn" onClick={() => {setEditing(null); setShowForm(!showForm);}}>
+            {showForm ? "Отмена" : "+ Добавить MCP-актив"}
+          </button>
+        )}
       </div>
       {error && (
         <div className="card" style={{ padding: "1rem 1.5rem", marginBottom: "1rem", borderLeft: "0.3rem solid var(--danger)" }}>
@@ -184,6 +188,7 @@ type EnvRow = { key: string; value: string };
 // MCP-протоколу, поэтому выбора режима нет). MCPB -- загрузка архива,
 // деплой опционален. Удалённый сервер -- один шаг.
 function McpAssetWizard({ onCreated }: { onCreated: () => void }) {
+  const {activeOrgId} = useAuth();
   const [step, setStep] = useState<"source" | "repo" | "deploy">("source");
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
@@ -230,7 +235,7 @@ function McpAssetWizard({ onCreated }: { onCreated: () => void }) {
     setInspecting(true);
     setError(null);
     try {
-      const result = await launcherApi.post<{ dockerfiles: string[] }>("/repo/inspect", {
+      const result = await api.post<{ dockerfiles: string[] }>("/repo/inspect", {
         git_repo_url: gitRepoUrl,
         git_ref: ref,
         git_access_token: gitAccessToken || null,
@@ -250,7 +255,7 @@ function McpAssetWizard({ onCreated }: { onCreated: () => void }) {
     setError(null);
     setLoadingRepo(true);
     try {
-      const result = await launcherApi.post<{ branches: string[] }>("/repo/branches", {
+      const result = await api.post<{ branches: string[] }>("/repo/branches", {
         git_repo_url: gitRepoUrl,
         git_access_token: gitAccessToken || null,
       });
@@ -275,15 +280,18 @@ function McpAssetWizard({ onCreated }: { onCreated: () => void }) {
     setArtifactError(null);
     setArtifactUploading(true);
     try {
+      if (activeOrgId == null) throw new Error("Сначала выберите организацию в шапке");
       let uploaded: MCPArtifact;
       if (bundleSource === "upload") {
         if (!bundleFile) throw new Error("Выберите MCPB-файл");
         const formData = new FormData();
         formData.append("file", bundleFile);
+        formData.append("organization_id", String(activeOrgId));
         uploaded = await api.postForm<MCPArtifact>("/mcp-artifacts/upload", formData);
       } else {
         if (!bundleUrl.trim()) throw new Error("Укажите HTTPS URI MCPB-архива");
         uploaded = await api.post<MCPArtifact>("/mcp-artifacts/from-url", {
+          organization_id: activeOrgId,
           url: bundleUrl.trim(),
           expected_sha256: bundleExpectedSha.trim() || null,
         });
@@ -354,7 +362,9 @@ function McpAssetWizard({ onCreated }: { onCreated: () => void }) {
     setBusy(true);
     setError(null);
     try {
+      if (activeOrgId == null) throw new Error("Сначала выберите организацию в шапке");
       await api.post<McpAsset>("/mcp-assets", {
+        organization_id: activeOrgId,
         name: resolvedName(),
         description: description.trim() || null,
         config: buildTarget(),
@@ -637,6 +647,7 @@ function McpAssetWizard({ onCreated }: { onCreated: () => void }) {
 }
 
 function SkillsAssetsTab() {
+  const {canEdit} = useAuth();
   const [assets, setAssets] = useState<SkillAsset[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
@@ -662,9 +673,11 @@ function SkillsAssetsTab() {
     <div>
       <div className="section-heading">
         <h2 style={{ margin: 0 }}>Skill-активы</h2>
-        <button className="btn btn-primary" onClick={() => {setEditing(null); setShowForm(!showForm);}}>
-          {showForm ? "Отмена" : "+ Добавить Skills"}
-        </button>
+        {canEdit && (
+          <button className="btn btn-primary" onClick={() => {setEditing(null); setShowForm(!showForm);}}>
+            {showForm ? "Отмена" : "+ Добавить Skills"}
+          </button>
+        )}
       </div>
       {error && (
         <div className="card" style={{ padding: "1rem 1.5rem", marginBottom: "1rem", borderLeft: "0.3rem solid var(--danger)" }}>
@@ -729,6 +742,7 @@ function SkillsAssetsTab() {
 }
 
 function SkillAssetForm({ asset, onClose, onCreated }: { asset?: SkillAsset; onClose: () => void; onCreated: () => void }) {
+  const {activeOrgId} = useAuth();
   const [name, setName] = useState(asset?.name ?? "");
   const [description, setDescription] = useState(asset?.description ?? "");
   const [source, setSource] = useState<"repository" | "zip">(asset?.source ?? "repository");
@@ -754,7 +768,9 @@ function SkillAssetForm({ asset, onClose, onCreated }: { asset?: SkillAsset; onC
             ...(clearToken ? {git_access_token: null} : gitAccessToken ? {git_access_token: gitAccessToken} : {})}),
         });
       } else if (source === "repository") {
+        if (activeOrgId == null) throw new Error("Сначала выберите организацию в шапке");
         await api.post<SkillAsset>("/skill-assets", {
+          organization_id: activeOrgId,
           name: name.trim(),
           description: description.trim() || null,
           git_repo_url: gitRepoUrl.trim(),
@@ -762,8 +778,10 @@ function SkillAssetForm({ asset, onClose, onCreated }: { asset?: SkillAsset; onC
           git_access_token: gitAccessToken.trim() || null,
         });
       } else {
+        if (activeOrgId == null) throw new Error("Сначала выберите организацию в шапке");
         if (!file) throw new Error("Выберите zip-архив");
         const formData = new FormData();
+        formData.append("organization_id", String(activeOrgId));
         formData.append("name", name.trim());
         formData.append("description", description.trim());
         formData.append("file", file);

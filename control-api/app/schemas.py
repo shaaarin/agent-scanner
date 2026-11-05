@@ -10,6 +10,7 @@ from app.models import (
     InjectionTrialStatus,
     InjectionVerdict,
     InteractionMode,
+    OrgRole,
     ProviderType,
     ScanLogLevel,
     ScanStatus,
@@ -20,6 +21,7 @@ from app.models import (
 
 class LLMModelCreate(BaseModel):
     name: str
+    organization_id: int = Field(gt=0)
     provider_type: ProviderType = ProviderType.OPENAI
     base_url: str
     api_key: str
@@ -28,6 +30,7 @@ class LLMModelCreate(BaseModel):
 
 class LLMModelRead(BaseModel):
     id: int
+    organization_id: int
     name: str
     provider_type: ProviderType
     base_url: str
@@ -44,8 +47,82 @@ class LLMModelUpdate(BaseModel):
     model: Optional[str] = None
 
 
+class OrganizationCreate(BaseModel):
+    name: str = Field(min_length=1)
+    description: Optional[str] = None
+
+
+class OrganizationUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+
+
+class OrganizationRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+    description: Optional[str]
+    created_at: datetime
+    # Роль вызвавшего пользователя в этой организации (None -- не участник,
+    # например системный админ или машинный контур).
+    my_role: Optional[OrgRole] = None
+    members_count: int = 0
+
+
+class MemberCreate(BaseModel):
+    """Приглашение участника по логину платформы. Если пользователя с таким
+    логином ещё нет, он создаётся «тихо» и пароль задаёт при регистрации
+    (или сразу -- через необязательный `password`)."""
+
+    login: str = Field(min_length=1)
+    role: OrgRole = OrgRole.READER
+    password: Optional[str] = None
+
+
+class MemberUpdate(BaseModel):
+    role: OrgRole
+
+
+class InviteCreate(BaseModel):
+    """Создание одноразовой ссылки-приглашения (admin организации)."""
+
+    role: OrgRole = OrgRole.READER
+
+
+class InviteRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    role: OrgRole
+    token: str  # секрет в URL: /invite/<token>
+    created_at: datetime
+    used: bool
+
+
+class InviteInfo(BaseModel):
+    """Публичная информация по ссылке (для страницы приглашения, без auth)."""
+
+    org_name: str
+    role: OrgRole
+    valid: bool
+
+
+class MemberRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    user_id: int
+    login: str
+    display_name: Optional[str]
+    email: Optional[str]
+    is_superadmin: bool = False
+    role: OrgRole
+    last_login_at: Optional[datetime] = None
+
+
 class AgentConfigCreate(BaseModel):
     name: str
+    organization_id: int = Field(gt=0)
     source: AgentSource = AgentSource.REPOSITORY
     # source=repository: сборка платформой из git.
     git_repo_url: Optional[str] = None
@@ -195,6 +272,7 @@ class MCPScanConfig(BaseModel):
 
 
 class MCPArtifactFromURL(BaseModel):
+    organization_id: int = Field(gt=0)
     url: HttpUrl
     expected_sha256: Optional[str] = None
 
@@ -220,6 +298,7 @@ class MCPArtifactRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
+    organization_id: int
     original_filename: str
     source_type: str
     source_url: Optional[str]
@@ -284,6 +363,7 @@ class McpDeploySettings(BaseModel):
 
 class McpAssetCreate(BaseModel):
     name: str = Field(min_length=1)
+    organization_id: int = Field(gt=0)
     description: Optional[str] = None
     # Форма MCPTarget (remote/repository/bundle); source/snapshot как цели
     # сканов не используются -- это режимы ad-hoc проверок.
@@ -300,6 +380,7 @@ class McpAssetUpdate(BaseModel):
 
 class SkillAssetCreate(BaseModel):
     name: str = Field(min_length=1)
+    organization_id: int = Field(gt=0)
     description: Optional[str] = None
     source: SkillSource = SkillSource.REPOSITORY
     git_repo_url: Optional[str] = None
@@ -327,6 +408,7 @@ class SkillAssetRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
+    organization_id: int
     name: str
     description: Optional[str]
     source: SkillSource
@@ -343,6 +425,7 @@ class AssetRead(BaseModel):
     kind: AssetKind
     id: int
     name: str
+    organization_id: int
     description: Optional[str] = None
     created_at: datetime
 
