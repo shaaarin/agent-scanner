@@ -7,6 +7,7 @@ embedded into the clone URL by app/git_auth.py) without touching the
 Kaniko step.
 """
 import os
+import re
 import shlex
 import time
 
@@ -42,15 +43,31 @@ def _build_job_manifest(job_name: str, namespace: str, agent_config: dict) -> k8
     destination = image_tag(agent_config["id"], agent_config["git_ref"])
     clone_url = authenticated_git_url(agent_config["git_repo_url"], agent_config.get("git_access_token"))
 
+    git_ref = agent_config["git_ref"].strip()
+    quoted_ref = shlex.quote(git_ref)
+    quoted_url = shlex.quote(clone_url)
+    if re.fullmatch(r"[0-9a-fA-F]{40}", git_ref):
+        # SHA нельзя склоонировать через `clone --branch`: fetch одного
+        # коммита (нужна поддержка uploadpack на сервере), при отказе --
+        # полный clone и checkout, работающий всегда.
+        clone_script = (
+            f"git init /workspace/src"
+            f" && git -C /workspace/src remote add origin {quoted_url}"
+            f" && git -C /workspace/src fetch --depth 1 origin {quoted_ref}"
+            f" && git -C /workspace/src checkout --detach FETCH_HEAD"
+            f" || {{ rm -rf /workspace/src"
+            f" && git clone {quoted_url} /workspace/src"
+            f" && git -C /workspace/src checkout --detach {quoted_ref}; }}"
+        )
+    else:
+        clone_script = f"git clone --branch {quoted_ref} --depth 1 {quoted_url} /workspace/src"
+
     clone_container = k8s.V1Container(
         name="clone",
         image=GIT_CLONE_IMAGE,
         command=["sh", "-c"],
-        # Ветка и адрес -- из AgentConfig, в shell-команду только через quote.
-        args=[
-            f"git clone --branch {shlex.quote(agent_config['git_ref'])} --depth 1 "
-            f"{shlex.quote(clone_url)} /workspace/src"
-        ],
+        # Ветка/SHA и адрес -- из AgentConfig, в shell-команду только через quote.
+        args=[clone_script],
         volume_mounts=[k8s.V1VolumeMount(name="workspace", mount_path="/workspace")],
     )
 

@@ -165,7 +165,7 @@ def _run(scan_id: int) -> None:
 
     engine_version = semgrep.version()
     _log(scan_id, f"Агент: {agent_config['name']}", phase="Инициализация")
-    _log(scan_id, f"Репозиторий: {agent_config['git_repo_url']} (ветка {agent_config['git_ref']})", phase="Инициализация")
+    _log(scan_id, f"Репозиторий: {agent_config['git_repo_url']} (ветка/коммит {agent_config['git_ref']})", phase="Инициализация")
     extras = ", ".join(RULE_SETS[value]["label"] for value in rule_sets)
     _log(
         scan_id,

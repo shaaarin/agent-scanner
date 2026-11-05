@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import type { AgentConfig, AgentSource, InteractionMode } from "../api/types";
@@ -127,6 +127,9 @@ export function AgentConfigs() {
   const [source, setSource] = useState<AgentSource>("repository");
   const [gitRepoUrl, setGitRepoUrl] = useState("");
   const [gitRef, setGitRef] = useState("main");
+  // Какой git_ref уже инспектировался (POST /repo/inspect): blur/Enter по
+  // редактируемому полю ветки не должны перезапускать осмотр без изменений.
+  const inspectedRef = useRef<string | null>(null);
   const [gitAccessToken, setGitAccessToken] = useState("");
   const [remoteBaseUrl, setRemoteBaseUrl] = useState("");
   const [remoteHeaderRows, setRemoteHeaderRows] = useState<EnvRow[]>(emptyEnv);
@@ -346,6 +349,7 @@ export function AgentConfigs() {
       }
 
       setWizardStep("config");
+      inspectedRef.current = defaultBranch;
       await loadInspect(defaultBranch);
     } catch (e) {
       setError(String(e));
@@ -391,6 +395,8 @@ export function AgentConfigs() {
 
   async function handleBranchChange(ref: string) {
     setGitRef(ref);
+    if (!ref || ref === inspectedRef.current) return;
+    inspectedRef.current = ref;
     if (draftId) {
       await api.put(`/agent-configs/${draftId}`, { git_ref: ref });
     }
@@ -760,7 +766,7 @@ export function AgentConfigs() {
                   <input value={gitRepoUrl} onChange={(e) => setGitRepoUrl(e.target.value)} required />
                 </div>
                 <div className="field">
-                  <label>Ветка / тег</label>
+                  <label>Ветка / тег / SHA коммита</label>
                   <input value={gitRef} onChange={(e) => setGitRef(e.target.value)} placeholder="main" />
                 </div>
                 <div className="field">
@@ -915,15 +921,30 @@ export function AgentConfigs() {
           ) : (
             <>
               <p style={{ fontSize: 13, color: "var(--text-500)", margin: "0 0 1.6rem" }}>
-                Выберите ветку из доступных. Дальше можно создать агента сразу — или настроить деплой для динамического тестирования.
+                Выберите ветку из доступных или вставьте полный SHA коммита. Дальше можно создать агента сразу — или
+                настроить деплой для динамического тестирования.
               </p>
               <div className="field">
-                <label>Ветка</label>
-                <select value={gitRef} onChange={(e) => handleBranchChange(e.target.value)} disabled={inspecting}>
+                <label>Ветка / тег / SHA коммита</label>
+                <input
+                  list="repo-ref-options"
+                  value={gitRef}
+                  onChange={(e) => setGitRef(e.target.value)}
+                  onBlur={(e) => handleBranchChange(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      handleBranchChange(e.currentTarget.value);
+                    }
+                  }}
+                  disabled={inspecting}
+                  placeholder="main"
+                />
+                <datalist id="repo-ref-options">
                   {branches.map((b) => (
-                    <option key={b} value={b}>{b}</option>
+                    <option key={b} value={b} />
                   ))}
-                </select>
+                </datalist>
               </div>
               <div style={{ display: "flex", gap: "0.6rem", marginTop: "1.6rem" }}>
                 <button className="btn" type="submit" disabled={inspecting}>Создать агента</button>

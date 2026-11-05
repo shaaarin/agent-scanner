@@ -139,7 +139,7 @@ def describe_source(source: dict) -> str:
     if source["kind"] == "zip":
         name = source.get("archive_filename") or "без имени"
         return f"zip-архив {name} (sha256 {str(source['archive_sha256'])[:12]}…)"
-    return f"репозиторий {source['git_repo_url']} (ветка {source.get('git_ref') or 'main'})"
+    return f"репозиторий {source['git_repo_url']} (ветка/коммит {source.get('git_ref') or 'main'})"
 
 
 def run_scan(scan_id: int) -> None:
