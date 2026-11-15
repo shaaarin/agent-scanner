@@ -241,3 +241,22 @@ docker compose run --rm \
 - [docs/system-prompt-leak.md](docs/system-prompt-leak.md) — сценарий
   утечки системного промпта;
 - [AGENTS.md](AGENTS.md) — карта репозитория и соглашения для разработки.
+
+### Демонстрация очереди сканирования навыков
+
+`docker compose up -d --build postgres rabbitmq control-api scanner-skills web` запускает
+статический анализ Agent Skills. В интерфейсе на http://localhost:4173 загрузите
+ZIP-архив навыка и создайте скан. Для воспроизводимого примера упакуйте каталог
+`scanner/skills/eval/corpus/cisco-test/safe/simple-formatter` и выберите движок Cisco.
+
+1. После создания скана остановите исполнителя командой `docker compose stop scanner-skills`.
+2. Запустите подготовленный скан. В очереди `skill-scans` появится сообщение:
+   `docker compose exec rabbitmq rabbitmqctl list_queues name messages_ready consumers`.
+3. Выполните `docker compose start scanner-skills`. Исполнитель сохранит результат
+   через control-api и подтвердит обработку сообщения. Откройте отчёт в карточке скана.
+
+RabbitMQ Management доступен локально на http://localhost:15672 (пользователь
+`scanner`, пароль по умолчанию `scanner-local`). Пароль для новой БД брокера задаётся
+переменной `RABBITMQ_PASSWORD` (для URL используйте буквы и цифры). Остальные типы
+сканирования вызываются по HTTP. Кэш схем сканеров принадлежит процессу control-api,
+его TTL составляет 30 секунд.

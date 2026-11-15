@@ -15,7 +15,7 @@ from app.db import engine
 from app.models import AssetKind, ScanType, SkillAsset, SkillSource
 from app.scanner_registry import REGISTRY, find, for_asset_kind
 
-from conftest import SKILL_MD, make_zip
+from conftest import SKILL_MD, TEST_ORG_ID, make_zip
 
 SKILLS_SCHEMA = {
     "type": "agent_skills",
@@ -124,7 +124,7 @@ def test_only_skills_scanner_for_skill_assets():
 @pytest.mark.parametrize("source", [SkillSource.ZIP, SkillSource.REPOSITORY])
 def test_skill_capabilities_are_code(source):
     with Session(engine) as session:
-        caps = _asset_capabilities(session, AssetKind.SKILL, SkillAsset(name="x", source=source))
+        caps = _asset_capabilities(session, AssetKind.SKILL, SkillAsset(organization_id=TEST_ORG_ID, name="x", source=source))
     assert caps == {"code"}
 
 
@@ -196,7 +196,7 @@ def test_content_unknown_asset_404(client):
 
 def test_content_zip_asset_without_blob_404(client):
     with Session(engine) as session:
-        asset = SkillAsset(name="empty", source=SkillSource.ZIP, archive_filename="x.zip")
+        asset = SkillAsset(organization_id=TEST_ORG_ID, name="empty", source=SkillSource.ZIP, archive_filename="x.zip")
         session.add(asset)
         session.commit()
         asset_id = asset.id
@@ -243,7 +243,7 @@ def test_create_scan_repository_snapshot_with_token(client, repo_asset):
 
 def test_create_scan_repository_default_ref(client):
     asset = client.post(
-        "/skill-assets", json={"name": "r2", "git_repo_url": "https://git.example.invalid/x.git", "git_ref": ""}
+        "/skill-assets", json={"organization_id": TEST_ORG_ID, "name": "r2", "git_repo_url": "https://git.example.invalid/x.git", "git_ref": ""}
     ).json()
     source = json.loads(_create_scan(client, asset).json()["config"])["source"]
     assert source["git_ref"] == "main"
@@ -270,7 +270,7 @@ def test_snapshot_survives_asset_edit(client, repo_asset):
 
 def test_create_scan_repository_without_url_422(client):
     with Session(engine) as session:
-        asset = SkillAsset(name="broken", source=SkillSource.REPOSITORY, git_repo_url="  ")
+        asset = SkillAsset(organization_id=TEST_ORG_ID, name="broken", source=SkillSource.REPOSITORY, git_repo_url="  ")
         session.add(asset)
         session.commit()
         asset_dict = {"id": asset.id}
@@ -281,7 +281,7 @@ def test_create_scan_repository_without_url_422(client):
 
 def test_create_scan_zip_without_archive_422(client):
     with Session(engine) as session:
-        asset = SkillAsset(name="noblob", source=SkillSource.ZIP)
+        asset = SkillAsset(organization_id=TEST_ORG_ID, name="noblob", source=SkillSource.ZIP)
         session.add(asset)
         session.commit()
         asset_dict = {"id": asset.id}
@@ -350,9 +350,31 @@ def test_start_scan_service_down_fails(client, zip_asset, monkeypatch):
 def test_uploaded_archive_roundtrip_multiple_skills(client):
     content = make_zip({"a/SKILL.md": SKILL_MD, "b/SKILL.md": SKILL_MD, "b/scripts/run.sh": "echo ok\n"})
     asset = client.post(
-        "/skill-assets/upload", data={"name": "pack"}, files={"file": ("pack.zip", content, "application/zip")}
+        "/skill-assets/upload", data={"organization_id": TEST_ORG_ID, "name": "pack"}, files={"file": ("pack.zip", content, "application/zip")}
     ).json()
     scan = _create_scan(client, asset).json()
     source = json.loads(scan["config"])["source"]
     fetched = client.get(f"/skill-assets/{source['asset_id']}/content")
     assert hashlib.sha256(fetched.content).hexdigest() == source["archive_sha256"]
+
+
+def test_skill_queue_publish_failure_leaves_scan_retryable(client, zip_asset, monkeypatch):
+    import pika
+    from app.api import scans
+
+    monkeypatch.setenv("RABBITMQ_URL", "amqp://test")
+    scan_id = _create_scan(client, zip_asset).json()["id"]
+
+    def unavailable(*args):
+        raise pika.exceptions.AMQPConnectionError("offline")
+
+    monkeypatch.setattr(scans, "publish", unavailable)
+    assert client.post(f"/scans/{scan_id}/start").status_code == 503
+    assert client.get(f"/scans/{scan_id}").json()["status"] == "pending"
+
+    deliveries = []
+    monkeypatch.setattr(scans, "publish", lambda *args: deliveries.append(args))
+    assert client.post(f"/scans/{scan_id}/start").json()["phase"] == "В очереди"
+    assert client.post(f"/scans/{scan_id}/start").status_code == 400
+    assert len(deliveries) == 1
+    assert deliveries[0][1] == scan_id

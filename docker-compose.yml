@@ -1,4 +1,20 @@
 services:
+  rabbitmq:
+    image: rabbitmq:4-management-alpine
+    hostname: rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: scanner
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-scanner-local}
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    ports:
+      - "127.0.0.1:15672:15672"
+    volumes:
+      - skill-queue-data:/var/lib/rabbitmq
+
   postgres:
     image: postgres:17-alpine
     environment:
@@ -18,6 +34,8 @@ services:
     ports:
       - "8000:8000"
     depends_on:
+      rabbitmq:
+        condition: service_healthy
       postgres:
         condition: service_healthy
     volumes:
@@ -39,6 +57,7 @@ services:
       SCANNER_SEMGREP_URL: http://scanner-semgrep:8000
       SCANNER_INDIRECT_URL: http://scanner-indirect:8000
       SCANNER_SYSLEAK_URL: http://scanner-sysleak:8000
+      RABBITMQ_URL: amqp://scanner:${RABBITMQ_PASSWORD:-scanner-local}@rabbitmq:5672/%2F
       SCANNER_SKILLS_URL: http://scanner-skills:8000
       LIBRARY_DIR: /library
       # Разбор репозитория в мастере конфигурации агента: control-api
@@ -181,6 +200,7 @@ services:
   scanner-skills:
     build: ./scanner/skills
     environment:
+      RABBITMQ_URL: amqp://scanner:${RABBITMQ_PASSWORD:-scanner-local}@rabbitmq:5672/%2F
       CONTROL_API_URL: http://control-api:8000
       INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:-}
       SCAN_MAX_CONCURRENT: "2"
@@ -411,5 +431,6 @@ networks:
     name: kind
 
 volumes:
+  skill-queue-data:
   control-api-pg-data:
   mitm-dev-ca:

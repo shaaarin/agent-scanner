@@ -1,4 +1,8 @@
 import json
+import os
+
+import pika
+from app.skill_queue import publish
 from datetime import datetime, timezone
 from typing import Optional
 from uuid import uuid4
@@ -324,11 +328,15 @@ def create_scan(
 @router.get("/{scan_id}")
 def get_scan(
     scan_id: int,
+    wait_for_dispatch: bool = False,
     caller: Caller = Depends(get_caller),
 ) -> Scan:
-    """Get a scan by ID."""
+    """Queue consumers wait for the publishing transaction to commit or roll back."""
     with Session(engine) as session:
-        scan = session.get(Scan, scan_id)
+        query = select(Scan).where(Scan.id == scan_id)
+        if wait_for_dispatch:
+            query = query.with_for_update(read=True)
+        scan = session.exec(query).first()
         if not scan:
             raise HTTPException(status_code=404, detail="Scan not found")
         ensure_org_access(caller, session, scan.organization_id)
@@ -407,10 +415,11 @@ def start_scan(
         if registration.validate_config is not None:
             registration.validate_config(scan.config)
 
+        broker = os.getenv("RABBITMQ_URL") if scan.type == ScanType.AGENT_SKILLS else None
         # Fresh progress log for this run.
         session.exec(delete(ScanLog).where(ScanLog.scan_id == scan_id))
         scan.status = ScanStatus.RUNNING
-        scan.phase = "Запуск"
+        scan.phase = "В очереди" if broker else "Запуск"
         scan.error = None
         scan.results = None
         scan.started_at = utcnow()
@@ -418,10 +427,18 @@ def start_scan(
         message = "Сканирование поставлено в очередь"
         if scan.retry_of_scan_id is not None:
             message += f". Повторная попытка скана №{scan.retry_of_scan_id}"
-        _log(session, scan_id, message, phase="Запуск")
+        _log(session, scan_id, message, phase=scan.phase)
+        if broker:
+            try:
+                publish(broker, scan_id, scan.started_at.replace(tzinfo=None).isoformat())
+            except (pika.exceptions.AMQPError, OSError) as exc:
+                raise HTTPException(status_code=503, detail="Очередь сканирования недоступна") from exc
         session.add(scan)
         session.commit()
         session.refresh(scan)
+
+    if broker:
+        return scan
 
     try:
         with httpx.Client(timeout=15.0) as client:

@@ -1,4 +1,6 @@
 import asyncio
+import os
+import threading
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -17,7 +19,20 @@ app.add_middleware(
 
 @app.on_event("startup")
 async def fail_interrupted_scans() -> None:
-    await asyncio.to_thread(runner.fail_interrupted_scans)
+    url = os.getenv("RABBITMQ_URL")
+    if not url:
+        await asyncio.to_thread(runner.fail_interrupted_scans)
+        return
+    from app.consumer import consume
+    app.state.consumer_stop = threading.Event()
+    for _ in range(runner.MAX_CONCURRENT):
+        threading.Thread(target=consume, args=(url, app.state.consumer_stop), daemon=True).start()
+
+
+@app.on_event("shutdown")
+def stop_consumers() -> None:
+    if stop := getattr(app.state, "consumer_stop", None):
+        stop.set()
 
 
 @app.get("/health")

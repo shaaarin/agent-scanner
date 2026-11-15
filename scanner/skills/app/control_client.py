@@ -18,8 +18,9 @@ _client = httpx.Client(
 )
 
 
-def get_scan(scan_id: int) -> dict:
-    resp = _client.get(f"/scans/{scan_id}")
+def get_scan(scan_id: int, *, wait_for_dispatch: bool = False) -> dict:
+    params = {"wait_for_dispatch": "true"} if wait_for_dispatch else {}
+    resp = _client.get(f"/scans/{scan_id}", params=params)
     resp.raise_for_status()
     return resp.json()
 
